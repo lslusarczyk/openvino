@@ -9,14 +9,6 @@
 
 // --- scalar ---
 #define _convert_as_bfloat16_float(val) intel_convert_as_bfloat16_float(val)
-#define _convert_bfloat16_as_ushort(val) intel_convert_bfloat16_as_ushort(val)
-
-// --- bfloat16_as_ushort (float -> ushort) vectorized ---
-#define _convert_bfloat162_as_ushort2(val)   intel_convert_bfloat162_as_ushort2(val)
-#define _convert_bfloat163_as_ushort3(val)   intel_convert_bfloat163_as_ushort3(val)
-#define _convert_bfloat164_as_ushort4(val)   intel_convert_bfloat164_as_ushort4(val)
-#define _convert_bfloat168_as_ushort8(val)   intel_convert_bfloat168_as_ushort8(val)
-#define _convert_bfloat1616_as_ushort16(val) intel_convert_bfloat1616_as_ushort16(val)
 
 // --- as_bfloat16_float (ushort -> float) vectorized ---
 #define _convert_as_bfloat162_float2(val)   intel_convert_as_bfloat162_float2(val)
@@ -41,70 +33,6 @@ inline float _convert_as_bfloat16_float(ushort source) {
     //fraction 
     u += (source & 0b1111111) << 16;
     return as_float(u);
-}
-
-inline ushort _convert_bfloat16_as_ushort(float source) {
-    // float -> bfloat16 using round-to-nearest, ties-to-even (ROUND_MODE_TO_NEAREST_EVEN).
-    // Mirrors ov::bfloat16::round_to_nearest_even in
-    // src/core/include/openvino/core/type/bfloat16.hpp.
-    uint u = as_uint(source);
-    // NaN handling: a float is NaN when its exponent bits are all ones and the
-    // mantissa is non-zero (abs(bits) > 0x7F800000). Plain truncation/rounding can
-    // drop all significant mantissa bits (or carry into the exponent) and silently
-    // turn a NaN into +/-Inf. Preserve the sign and emit a quiet bfloat16 NaN.
-    if ((u & 0x7FFFFFFFu) > 0x7F800000u) {
-        return (ushort)((u >> 16) | 0x0040u);
-    }
-    return (ushort)((u + ((u & 0x00010000u) >> 1)) >> 16);
-}
-
-// --- bfloat16_as_ushort (float -> ushort) vectorized ---
-inline ushort2 _convert_bfloat162_as_ushort2(float2 source) {
-    return (ushort2)(_convert_bfloat16_as_ushort(source.s0),
-                     _convert_bfloat16_as_ushort(source.s1));
-}
-
-inline ushort3 _convert_bfloat163_as_ushort3(float3 source) {
-    return (ushort3)(_convert_bfloat16_as_ushort(source.s0),
-                     _convert_bfloat16_as_ushort(source.s1),
-                     _convert_bfloat16_as_ushort(source.s2));
-}
-
-inline ushort4 _convert_bfloat164_as_ushort4(float4 source) {
-    return (ushort4)(_convert_bfloat16_as_ushort(source.s0),
-                     _convert_bfloat16_as_ushort(source.s1),
-                     _convert_bfloat16_as_ushort(source.s2),
-                     _convert_bfloat16_as_ushort(source.s3));
-}
-
-inline ushort8 _convert_bfloat168_as_ushort8(float8 source) {
-    return (ushort8)(_convert_bfloat16_as_ushort(source.s0),
-                     _convert_bfloat16_as_ushort(source.s1),
-                     _convert_bfloat16_as_ushort(source.s2),
-                     _convert_bfloat16_as_ushort(source.s3),
-                     _convert_bfloat16_as_ushort(source.s4),
-                     _convert_bfloat16_as_ushort(source.s5),
-                     _convert_bfloat16_as_ushort(source.s6),
-                     _convert_bfloat16_as_ushort(source.s7));
-}
-
-inline ushort16 _convert_bfloat1616_as_ushort16(float16 source) {
-    return (ushort16)(_convert_bfloat16_as_ushort(source.s0),
-                      _convert_bfloat16_as_ushort(source.s1),
-                      _convert_bfloat16_as_ushort(source.s2),
-                      _convert_bfloat16_as_ushort(source.s3),
-                      _convert_bfloat16_as_ushort(source.s4),
-                      _convert_bfloat16_as_ushort(source.s5),
-                      _convert_bfloat16_as_ushort(source.s6),
-                      _convert_bfloat16_as_ushort(source.s7),
-                      _convert_bfloat16_as_ushort(source.s8),
-                      _convert_bfloat16_as_ushort(source.s9),
-                      _convert_bfloat16_as_ushort(source.sa),
-                      _convert_bfloat16_as_ushort(source.sb),
-                      _convert_bfloat16_as_ushort(source.sc),
-                      _convert_bfloat16_as_ushort(source.sd),
-                      _convert_bfloat16_as_ushort(source.se),
-                      _convert_bfloat16_as_ushort(source.sf));
 }
 
 // --- as_bfloat16_float (ushort -> float) vectorized ---
@@ -157,6 +85,77 @@ inline float16 _convert_as_bfloat1616_float16(ushort16 source) {
 }
 
 #endif
+
+// ===================== bfloat16_as_ushort (float -> ushort) =====================
+
+inline ushort _convert_bfloat16_as_ushort(float source) {
+    // float -> bfloat16 using round-to-nearest, ties-to-even (ROUND_MODE_TO_NEAREST_EVEN).
+    // Mirrors ov::bfloat16::round_to_nearest_even in
+    // src/core/include/openvino/core/type/bfloat16.hpp.
+    uint u = as_uint(source);
+    // NaN handling: a float is NaN when its exponent bits are all ones and the
+    // mantissa is non-zero (abs(bits) > 0x7F800000). Plain truncation/rounding can
+    // drop all significant mantissa bits (or carry into the exponent) and silently
+    // turn a NaN into +/-Inf. The built-in does not keep the sign and the payload
+    // either. Preserve the sign and emit a quiet bfloat16 NaN.
+    if ((u & 0x7FFFFFFFu) > 0x7F800000u) {
+        return (ushort)((u >> 16) | 0x0040u);
+    }
+#ifdef cl_intel_bfloat16_conversions
+    return intel_convert_bfloat16_as_ushort(source);
+#else
+    return (ushort)((u + ((u & 0x00010000u) >> 1)) >> 16);
+#endif
+}
+
+// --- vectorized ---
+inline ushort2 _convert_bfloat162_as_ushort2(float2 source) {
+    return (ushort2)(_convert_bfloat16_as_ushort(source.s0),
+                     _convert_bfloat16_as_ushort(source.s1));
+}
+
+inline ushort3 _convert_bfloat163_as_ushort3(float3 source) {
+    return (ushort3)(_convert_bfloat16_as_ushort(source.s0),
+                     _convert_bfloat16_as_ushort(source.s1),
+                     _convert_bfloat16_as_ushort(source.s2));
+}
+
+inline ushort4 _convert_bfloat164_as_ushort4(float4 source) {
+    return (ushort4)(_convert_bfloat16_as_ushort(source.s0),
+                     _convert_bfloat16_as_ushort(source.s1),
+                     _convert_bfloat16_as_ushort(source.s2),
+                     _convert_bfloat16_as_ushort(source.s3));
+}
+
+inline ushort8 _convert_bfloat168_as_ushort8(float8 source) {
+    return (ushort8)(_convert_bfloat16_as_ushort(source.s0),
+                     _convert_bfloat16_as_ushort(source.s1),
+                     _convert_bfloat16_as_ushort(source.s2),
+                     _convert_bfloat16_as_ushort(source.s3),
+                     _convert_bfloat16_as_ushort(source.s4),
+                     _convert_bfloat16_as_ushort(source.s5),
+                     _convert_bfloat16_as_ushort(source.s6),
+                     _convert_bfloat16_as_ushort(source.s7));
+}
+
+inline ushort16 _convert_bfloat1616_as_ushort16(float16 source) {
+    return (ushort16)(_convert_bfloat16_as_ushort(source.s0),
+                      _convert_bfloat16_as_ushort(source.s1),
+                      _convert_bfloat16_as_ushort(source.s2),
+                      _convert_bfloat16_as_ushort(source.s3),
+                      _convert_bfloat16_as_ushort(source.s4),
+                      _convert_bfloat16_as_ushort(source.s5),
+                      _convert_bfloat16_as_ushort(source.s6),
+                      _convert_bfloat16_as_ushort(source.s7),
+                      _convert_bfloat16_as_ushort(source.s8),
+                      _convert_bfloat16_as_ushort(source.s9),
+                      _convert_bfloat16_as_ushort(source.sa),
+                      _convert_bfloat16_as_ushort(source.sb),
+                      _convert_bfloat16_as_ushort(source.sc),
+                      _convert_bfloat16_as_ushort(source.sd),
+                      _convert_bfloat16_as_ushort(source.se),
+                      _convert_bfloat16_as_ushort(source.sf));
+}
 
 // Scalar aliases so that size=1 concatenation resolves correctly.
 #define _convert_bfloat161_as_ushort1(val) _convert_bfloat16_as_ushort(val)
