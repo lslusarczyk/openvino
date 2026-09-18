@@ -83,18 +83,38 @@ public:
 #define cu32(x) (F32(x).i)
 
     static uint16_t round_to_nearest_even(float x) {
+        if (is_nan(x)) {
+            return nan_to_bits(x);
+        }
         return static_cast<uint16_t>((cu32(x) + ((cu32(x) & 0x00010000) >> 1)) >> 16);
     }
 
     static uint16_t round_to_nearest(float x) {
+        if (is_nan(x)) {
+            return nan_to_bits(x);
+        }
         return static_cast<uint16_t>((cu32(x) + 0x8000) >> 16);
     }
 
     static uint16_t truncate(float x) {
+        if (is_nan(x)) {
+            return nan_to_bits(x);
+        }
         return static_cast<uint16_t>((cu32(x)) >> 16);
     }
 
 private:
+    static bool is_nan(float x) {
+        return (cu32(x) & 0x7FFFFFFF) > 0x7F800000;
+    }
+
+    // A NaN has to stay a NaN. bfloat16 keeps only the top 7 mantissa bits, so dropping
+    // the rest can leave an infinity, and the carry of a round can even reach the sign.
+    // Keep the sign and emit a quiet NaN.
+    static uint16_t nan_to_bits(float x) {
+        return static_cast<uint16_t>((cu32(x) >> 16) | 0x0040);
+    }
+
     constexpr bfloat16(uint16_t x, bool) : m_value{x} {}
     union F32 {
         F32(float val) : f{val} {}

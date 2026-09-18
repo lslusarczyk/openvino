@@ -7,9 +7,11 @@
 #include <gtest/gtest.h>
 
 #include <climits>
+#include <cmath>
 #include <iomanip>
 #include <random>
 #include <sstream>
+#include <vector>
 
 #include "common_test_utils/float_util.hpp"
 #include "openvino/runtime/aligned_buffer.hpp"
@@ -106,6 +108,34 @@ TEST(bfloat16, round_to_nearest_even) {
     fvalue = ov::test::utils::bits_to_float(fstring);
     bf_round = bfloat16::round_to_nearest_even(fvalue);
     EXPECT_EQ(bf_round, 0x3FFF);
+}
+
+// bfloat16 keeps only the top 7 mantissa bits, so dropping the rest can leave an
+// infinity, and the carry of a round can even reach the sign. A NaN has to stay a NaN
+// of the same sign in every rounding mode.
+TEST(bfloat16, nan_keeps_sign_and_stays_nan) {
+    const std::vector<const char*> nan_strings = {
+        "0  11111111  100 0000 0000 0000 0000 0000",  // quiet
+        "1  11111111  100 0000 0000 0000 0000 0000",
+        "0  11111111  000 0000 0000 0000 0000 0001",  // only the lowest mantissa bit
+        "1  11111111  000 0000 0000 0000 0000 0001",
+        "0  11111111  111 1111 1111 1111 1111 1111",  // every mantissa bit
+        "0  11111111  000 0000 1000 0000 0000 0000",  // mantissa bit at the rounding boundary
+    };
+
+    for (const auto& fstring : nan_strings) {
+        const float fvalue = ov::test::utils::bits_to_float(fstring);
+        ASSERT_TRUE(std::isnan(fvalue)) << fstring;
+
+        const uint16_t expected_sign = fstring[0] == '1' ? 1 : 0;
+        for (const uint16_t bf_bits : {bfloat16::round_to_nearest(fvalue),
+                                       bfloat16::round_to_nearest_even(fvalue),
+                                       bfloat16::truncate(fvalue)}) {
+            EXPECT_TRUE(std::isnan(static_cast<float>(bfloat16::from_bits(bf_bits))))
+                << fstring << " -> " << to_hex(bf_bits);
+            EXPECT_EQ(bf_bits >> 15, expected_sign) << fstring << " -> " << to_hex(bf_bits);
+        }
+    }
 }
 
 TEST(bfloat16, to_float) {
