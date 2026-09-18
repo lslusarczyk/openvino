@@ -57,6 +57,14 @@ TEST(F8E8M0Test, f32_nan_signaling) {
     EXPECT_EQ(f8.to_bits(), 0b11111111);
 }
 
+// The sign of a nan carries no value, so a negative nan is still a nan and must not be
+// taken for a negative number, which this type maps to its lowest value.
+TEST(F8E8M0Test, f32_nan_negative) {
+    const auto f8 = ov::float8_e8m0(-std::numeric_limits<float>::quiet_NaN());
+
+    EXPECT_EQ(f8.to_bits(), 0b11111111);
+}
+
 TEST(F8E8M0Test, f32_zero) {
     const auto f8 = ov::float8_e8m0(0.0f);
 
