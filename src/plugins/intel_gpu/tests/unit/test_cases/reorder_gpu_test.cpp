@@ -18,6 +18,7 @@
 #include "reorder_inst.h"
 
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <numeric>
 
@@ -251,6 +252,59 @@ TEST(reorder_gpu_optimization, compare_with_ref__bfyx_to_double_blocked_bf16) {
     compare_bfyx2blocked_with_ref("reorder_data_bfyx_to_blocked_format", data_types::bf16, data_types::bf16, format::bfyx, format::bs_fs_yx_bsv16_fsv32, 32, 48 + 5, 16, 4, 0, 0, false);
     compare_bfyx2blocked_with_ref("reorder_data_bfyx_to_blocked_format", data_types::bf16, data_types::bf16, format::bfyx, format::bs_fs_yx_bsv16_fsv32, 32, 48, 48 + 3, 4, 0, 0, false);
     compare_bfyx2blocked_with_ref("reorder_data_bfyx_to_blocked_format", data_types::bf16, data_types::bf16, format::bfyx, format::bs_fs_yx_bsv16_fsv32, 32 + 2, 48 + 3, 16 + 1, 4, 0, 0, false);
+}
+
+static float float_from_bits(uint32_t bits) {
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+// A NaN has to stay a NaN of the same sign in bfloat16. Plain truncation or rounding
+// drops the mantissa bits that make it a NaN and yields an infinity instead.
+TEST(reorder_gpu_bf16, nan_keeps_sign_and_stays_nan)
+{
+    auto& engine = get_test_engine();
+
+    const std::vector<uint32_t> input_bits = {
+        0x7FC00000, // +NaN, quiet
+        0xFFC00000, // -NaN, quiet
+        0x7F800001, // +NaN, only the lowest mantissa bit
+        0xFF800001, // -NaN, only the lowest mantissa bit
+    };
+
+    layout in_layout({ov::PartialShape{1, 1, 1, static_cast<int64_t>(input_bits.size())},
+                      data_types::f32, format::bfyx});
+    auto input = engine.allocate_memory(in_layout);
+
+    std::vector<float> input_data;
+    for (auto bits : input_bits) {
+        input_data.push_back(float_from_bits(bits));
+    }
+    set_values(input, input_data);
+
+    topology topology(
+        input_layout("input", input->get_layout()),
+        reorder("reorder", input_info("input"), format::bfyx, data_types::bf16));
+
+    auto config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+    config.set_property(ov::intel_gpu::optimize_data(true));
+
+    network network(engine, topology, config);
+    network.set_input_data("input", input);
+
+    auto outputs = network.execute();
+    auto output = outputs.begin()->second.get_memory();
+
+    cldnn::mem_lock<uint16_t> output_ptr(output, get_test_stream());
+    ASSERT_EQ(output_ptr.size(), input_bits.size());
+    for (size_t i = 0; i < input_bits.size(); i++) {
+        const uint16_t got = output_ptr[i];
+        EXPECT_EQ(got >> 15, input_bits[i] >> 31) << "sign of element " << i;
+        EXPECT_EQ(got & 0x7F80, 0x7F80) << "exponent of element " << i;
+        EXPECT_NE(got & 0x007F, 0) << "mantissa of element " << i;
+    }
 }
 
 TEST(reorder_gpu_optimization, compare_with_ref__bfyx_to_double_blocked_f32_bsv16_fsv32) {
