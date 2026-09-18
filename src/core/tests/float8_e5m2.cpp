@@ -40,6 +40,25 @@ TEST(F8E5M2Test, f32_minus_inf) {
     EXPECT_EQ(f8, -std::numeric_limits<float8_e5m2>::infinity());
 }
 
+// f8e5m2 keeps 2 mantissa bits. A nan whose payload sits only in the dropped bits has to
+// stay a nan of the same sign, not turn into an infinity.
+TEST(F8E5M2Test, f32_nan_with_payload_below_kept_bits) {
+    const std::vector<const char*> nan_strings = {
+        "0  11111111  000 0000 0000 0000 0000 0001",  // only the lowest mantissa bit
+        "1  11111111  000 0000 0000 0000 0000 0001",
+        "0  11111111  000 0000 1000 0000 0000 0000",  // one bit below the kept ones
+    };
+
+    for (const auto& fstring : nan_strings) {
+        const float fvalue = ov::test::utils::bits_to_float(fstring);
+        ASSERT_TRUE(std::isnan(fvalue)) << fstring;
+
+        const auto f8 = ov::float8_e5m2(fvalue);
+        EXPECT_TRUE(std::isnan(static_cast<float>(f8))) << fstring;
+        EXPECT_EQ(f8.to_bits() >> 7, fstring[0] == '1' ? 1 : 0) << fstring;
+    }
+}
+
 TEST(F8E5M2Test, f8e5m2_num_limits_is_specialized) {
     const auto val = std::numeric_limits<ov::float8_e5m2>::is_specialized;
     EXPECT_TRUE(val);
