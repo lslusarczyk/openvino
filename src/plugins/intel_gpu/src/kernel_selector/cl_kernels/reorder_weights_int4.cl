@@ -161,15 +161,14 @@ KERNEL(reorder_weights_int4)(const __global INPUT0_TYPE* input, __global OUTPUT_
     const unsigned o = (uint)get_global_id(0);
     const unsigned i = (uint)get_global_id(1) * 2;
 
-    // Calculate the input buffer offset
-    const uint input0_offset = GET_FILTER_INDEX(INPUT0, 0, o, i, 0, 0);
-
-    // Extract 8-bit packed value from the input buffer
-    INPUT0_TYPE in1 = input[input0_offset / 2] & 0xFF;
-
-    // Prepare the output value by directly using the extracted value
-    // Since the data is packed, no further processing is needed here
-    INPUT0_TYPE packed_out_channels = in1;
+    // Extract 8-bit packed value from the input buffer. gws0 is OFM aligned up to the
+    // osv, so the last work-items have no input row. They still own an output slot,
+    // which is padding and must read as zero.
+    INPUT0_TYPE packed_out_channels = 0;
+    if (o < INPUT0_OFM_NUM) {
+        const uint input0_offset = GET_FILTER_INDEX(INPUT0, 0, o, i, 0, 0);
+        packed_out_channels = input[input0_offset / 2] & 0xFF;
+    }
 
     // Calculate the output buffer index for the packed 8-bit data
     const uint output_idx = GET_FILTER_OS_IS_YX_OSV_ISV_INDEX_INT4_PACKED(OUTPUT, o, i/2, 0, 0, 64);
