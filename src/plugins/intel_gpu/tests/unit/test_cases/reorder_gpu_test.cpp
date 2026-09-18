@@ -4942,6 +4942,78 @@ TEST(reorder_weight_gpu_i4, reorder_for_padding_4d)
     run_reorder_weight_int4({2, 2, 2, 7}, {0, 0, 0, 1});
 }
 
+// Reorders ofm rows to an osv format, with the rows the kernel may reach past ofm
+// filled with tail. The input is a view over a real allocation of osv rows, so a
+// read past ofm hits tail instead of leaving the allocation.
+static std::vector<uint8_t> reorder_int4_weights_with_tail(size_t ofm, size_t ifm, cldnn::format::type target_format,
+                                                           size_t osv, uint8_t tail) {
+    auto& engine = get_test_engine();
+
+    const size_t row_bytes = ifm / 2;
+
+    layout in_layout({ov::Shape{ofm, ifm}, data_types::i4, format::bfyx});
+    layout alloc_layout({ov::Shape{osv, ifm}, data_types::i4, format::bfyx});
+
+    auto allocated = engine.allocate_memory(alloc_layout);
+
+    std::vector<uint8_t> input_data(osv * row_bytes, tail);
+    for (size_t o = 0; o < ofm; o++) {
+        for (size_t b = 0; b < row_bytes; b++) {
+            input_data[o * row_bytes + b] = static_cast<uint8_t>(0x21 + b + o);
+        }
+    }
+    set_values(allocated, input_data);
+
+    auto input = engine.reinterpret_buffer(*allocated, in_layout);
+
+    layout reorder_in_layout = in_layout.convert_to_weights_layout(false);
+    layout reorder_out_layout = reorder_in_layout;
+    reorder_out_layout.format = target_format;
+    auto weights_reorder_params = std::make_shared<WeightsReorderParams>(reorder_in_layout, reorder_out_layout, false, false);
+
+    topology topology(
+        input_layout("input", input->get_layout()),
+        reorder("reorder", input_info("input"), weights_reorder_params));
+
+    auto config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+    config.set_property(ov::intel_gpu::optimize_data(true));
+
+    network network(engine, topology, config);
+    network.set_input_data("input", input);
+
+    auto outputs = network.execute();
+    auto output = outputs.begin()->second.get_memory();
+
+    cldnn::mem_lock<uint8_t> output_ptr(output, get_test_stream());
+    std::vector<uint8_t> result(output_ptr.size());
+    for (size_t i = 0; i < output_ptr.size(); i++) {
+        result[i] = output_ptr[i];
+    }
+    return result;
+}
+
+// An osv format pads the output feature count up to the osv and the dispatch covers
+// every padded slot, so a weights buffer with fewer rows has slots with no input row.
+// Whatever the kernel writes there, it must not depend on the memory that follows the
+// weights: the result has to be the same for any tail.
+static void run_reorder_int4_ignores_tail(size_t ifm, cldnn::format::type target_format, size_t osv) {
+    const auto zeros  = reorder_int4_weights_with_tail(1, ifm, target_format, osv, 0x00);
+    const auto poison = reorder_int4_weights_with_tail(1, ifm, target_format, osv, 0xFF);
+
+    ASSERT_FALSE(zeros.empty());
+    ASSERT_EQ(zeros.size(), poison.size());
+    for (size_t i = 0; i < zeros.size(); i++) {
+        ASSERT_EQ(zeros[i], poison[i]) << "byte " << i << " depends on memory past ofm";
+    }
+}
+
+TEST(reorder_weight_gpu_i4, osv16_ignores_memory_past_ofm)
+{
+    run_reorder_int4_ignores_tail(32, format::os_iyx_osv16, 16);
+}
+
+
 template <typename T>
 static void run_reorder_uint4(const ov::Shape in_shape) {
     auto& engine = get_test_engine();
