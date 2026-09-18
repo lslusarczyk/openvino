@@ -5013,6 +5013,11 @@ TEST(reorder_weight_gpu_i4, osv16_ignores_memory_past_ofm)
     run_reorder_int4_ignores_tail(32, format::os_iyx_osv16, 16);
 }
 
+TEST(reorder_weight_gpu_i4, osv32_ignores_memory_past_ofm)
+{
+    run_reorder_int4_ignores_tail(32, format::os_iyx_osv32, 32);
+}
+
 
 template <typename T>
 static void run_reorder_uint4(const ov::Shape in_shape) {
