@@ -85,14 +85,19 @@ KERNEL(reorder_weights_int4)(const __global INPUT0_TYPE* input, __global OUTPUT_
     const unsigned o0 = (o / 16) * 32 + (o % 16);
     const unsigned o1 = (o / 16) * 32 + (o % 16) + 16;
 
-    const uint input0_offset = GET_FILTER_INDEX(INPUT0, 0, o0, i, 0, 0);
-    const uint input1_offset = GET_FILTER_INDEX(INPUT0, 0, o1, i, 0, 0);
+    // gws0 covers the osv, so a feature past OFM has no input row. It is padding
+    // in the output and must read as zero.
+    INPUT0_TYPE in0 = 0;
+    if (o0 < INPUT0_OFM_NUM) {
+        const uint input0_offset = GET_FILTER_INDEX(INPUT0, 0, o0, i, 0, 0);
+        in0 = (input[input0_offset / 2] >> (input0_offset % 2)*4) & 0x0F;
+    }
 
-    const uint input0_idx = input0_offset % 2;
-    const uint input1_idx = input1_offset % 2;
-
-    INPUT0_TYPE in0 = (input[input0_offset / 2] >> input0_idx*4) & 0x0F;
-    INPUT0_TYPE in1 = (input[input1_offset / 2] >> input1_idx*4) & 0x0F;
+    INPUT0_TYPE in1 = 0;
+    if (o1 < INPUT0_OFM_NUM) {
+        const uint input1_offset = GET_FILTER_INDEX(INPUT0, 0, o1, i, 0, 0);
+        in1 = (input[input1_offset / 2] >> (input1_offset % 2)*4) & 0x0F;
+    }
 
     INPUT0_TYPE packed_out_channels = in0 | (in1 << 4);
 
