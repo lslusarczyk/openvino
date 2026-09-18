@@ -28,12 +28,14 @@ void emulate_f8e5m2_on_fp16(const float16* const arg_f, float16* out_f, size_t c
     constexpr uint16_t grs_bitmask = 0x00FF;  /// 0 00000 0011111111, grs denotes guard, round, sticky bits
     constexpr uint16_t rne_tie = 0x0180;      /// 0 00000 0110000000, rne denotes round to nearest even
     constexpr uint16_t fp16_inf = 0x7C00;
+    constexpr uint16_t mask_mant_fp16 = 0x03FF;  /// 0 00000 1111111111
 
     for (size_t i = 0; i < count; ++i) {
         /// converts float number to half precision in round-to-nearest-even mode and returns half with converted value.
         val_bit_repr = arg_u[i];
         /// s 11111 xxx xxxx xxxx - is nan (if some x is 1) or inf (if all x is 0)
         const bool is_naninf = ((val_bit_repr & fp16_inf) == fp16_inf) ? true : false;
+        const bool is_nan = is_naninf && ((val_bit_repr & mask_mant_fp16) != 0);
         /* nearest rounding masks */
         /// grs_bitmask - grs_bitmask is 0 00000 0011111111 or 0 00000 00grs11111
         uint16_t rnmask = (val_bit_repr & grs_bitmask);
@@ -49,6 +51,11 @@ void emulate_f8e5m2_on_fp16(const float16* const arg_f, float16* out_f, size_t c
             val_bit_repr += (((rnmask > 0x0080) || (rnmask_tie == rne_tie)) << lshift);
         }
         val_bit_repr &= mask_mant; /* truncation */
+        /// f8e5m2 keeps 2 mantissa bits, so the truncation can drop every bit that makes
+        /// the value a nan and leave an inf. Keep one bit to stay a nan.
+        if (is_nan && (val_bit_repr & mask_mant_fp16) == 0) {
+            val_bit_repr |= (1 << lshift);
+        }
         if (use_clamp) {
             // clamp inf to max and -inf to lowest, S.11111.00 -> S.11110.11
             val_bit_repr -= (((val_bit_repr & 0x7F00) == fp16_inf) << lshift);
