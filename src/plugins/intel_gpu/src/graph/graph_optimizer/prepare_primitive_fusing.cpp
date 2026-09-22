@@ -1492,10 +1492,12 @@ void prepare_primitive_fusing::fuse_constant_transposes(program& p) {
             continue;
 
         auto permute_order = permute_node.get_primitive()->permute_order;
-        // Assumption that fc weights will be reshaped to 2d
+        // Weights of rank two are read as a matrix, so a swap of their two axes is only a
+        // change of the layout. Weights that keep a batch need the data itself moved.
         if (permute_order.size() != 2 && weightable_node->is_type<fully_connected>()) {
-            if (permute_order == std::vector<uint16_t>{0, 2, 1} ||
-                permute_order == std::vector<uint16_t>{0, 1, 3, 2}) {
+            if (weightable_node->as<fully_connected>().get_primitive()->weights_rank == 2 &&
+                (permute_order == std::vector<uint16_t>{0, 2, 1} ||
+                 permute_order == std::vector<uint16_t>{0, 1, 3, 2})) {
                 permute_order = {1, 0};
             } else {
                 continue;
