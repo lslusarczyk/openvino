@@ -1706,3 +1706,27 @@ TEST(mvn_gpu_test, crop_then_mvn_last_axis_contiguous_input) {
         ASSERT_NEAR(out_ptr[i], reference[i], tolerance) << " mismatch at index " << i;
     }
 }
+
+TEST(mvn_gpu_test, mvn_test_zero_variance_outside_sqrt_fp16) {
+    // A constant input has a variance of zero. In half precision the reciprocal of a
+    // small epsilon overflows, and the output becomes a NaN instead of a zero.
+    auto& engine = get_test_engine();
+
+    auto input = engine.allocate_memory(layout{ov::PartialShape{1, 2, 4}, data_types::f16, format::bfyx});
+    set_values(input, std::vector<ov::float16>(2 * 4, ov::float16(2.0f)));
+
+    topology topology;
+    topology.add(input_layout("input", input->get_layout()));
+    topology.add(mvn("mvn", input_info("input"), true, 1e-9f, false, {2}));
+
+    network network(engine, topology, get_test_default_config(engine));
+    network.set_input_data("input", input);
+
+    auto outputs = network.execute();
+    auto output = outputs.at("mvn").get_memory();
+    cldnn::mem_lock<ov::float16, mem_lock_type::read> output_ptr(output, get_test_stream());
+
+    for (size_t i = 0; i < output_ptr.size(); ++i) {
+        ASSERT_EQ(static_cast<float>(output_ptr[i]), 0.f) << i;
+    }
+}
