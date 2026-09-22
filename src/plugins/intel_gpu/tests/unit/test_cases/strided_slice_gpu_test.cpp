@@ -3057,3 +3057,31 @@ TEST(strided_slice_gpu_mark_skippable, full_end_mask_is_skippable) {
     // All dims are full-slice, so it should be runtime skippable
     ASSERT_TRUE(ss_node.is_runtime_skippable());
 }
+
+// An end below the first element ends a reversed slice at the start of the axis.
+// The slice still begins where begin says, so the last element read is index 0.
+TEST(strided_slice_gpu_f32, negative_stride_end_before_first_element) {
+    auto& engine = get_test_engine();
+    auto input = engine.allocate_memory({ ov::PartialShape{ 6, 1, 1, 1 }, data_types::f32, format::bfyx });
+    set_values<float>(input, { 0.f, 1.f, 2.f, 3.f, 4.f, 5.f });
+
+    std::vector<int64_t> begin_data = { 3, 0, 0, 0 };
+    std::vector<int64_t> end_data = { -8, 1, 1, 1 };
+    std::vector<int64_t> strides_data = { -1, 1, 1, 1 };
+
+    topology topology;
+    topology.add(input_layout("input", input->get_layout()));
+    topology.add(strided_slice("strided_slice", input_info("input"), begin_data, end_data, strides_data,
+                               {}, {}, {}, {}, {}, { 4, 1, 1, 1 }));
+
+    network network(engine, topology, get_test_default_config(engine));
+    network.set_input_data("input", input);
+    auto outputs = network.execute();
+
+    const std::vector<float> expected = { 3.f, 2.f, 1.f, 0.f };
+    cldnn::mem_lock<float, mem_lock_type::read> output_ptr(outputs.at("strided_slice").get_memory(), get_test_stream());
+    ASSERT_EQ(expected.size(), output_ptr.size());
+    for (size_t i = 0; i < expected.size(); i++) {
+        ASSERT_TRUE(are_equal(expected[i], output_ptr[i])) << "at " << i;
+    }
+}
