@@ -120,16 +120,19 @@ public:
         pp.remainderAction = primitive->rounding_type == ov::op::RoundingType::CEIL ? kernel_selector::pool_remainder::CEIL
                                                                                     : kernel_selector::pool_remainder::FLOOR;
 
-        // check if last pooling window goes outside of input size + padding. If so the avg pooling size will be
-        // adjusted to that, to work properly this calculation must take pad_end into account.
-        auto dynamic_mode = false;
+        // A window of the ceil mode can run past the input. The average then counts the
+        // padding, but only when the primitive has padding at all, see the reference.
+        auto past_input = false;
         for (size_t i = 0; i < spatial_rank; i++) {
-            dynamic_mode |= (((output_layout.spatial(i) - 1) * stride[spatial_rank - i - 1]) + kernel[spatial_rank - i - 1]) >
+            past_input |= (((output_layout.spatial(i) - 1) * stride[spatial_rank - i - 1]) + kernel[spatial_rank - i - 1]) >
                                  static_cast<size_t>(pads_end[spatial_rank - i - 1] + pads_begin[spatial_rank - i - 1] + input_layout.spatial(i));
         }
+        const auto is_zero = [](std::ptrdiff_t pad) { return pad == 0; };
+        const auto no_padding = std::all_of(pads_begin.begin(), pads_begin.end(), is_zero) &&
+                                std::all_of(pads_end.begin(), pads_end.end(), is_zero);
 
-        if (primitive->mode == pooling_mode::average && dynamic_mode) {
-            pp.divMode = kernel_selector::kernel_divider_mode::DYNAMIC_WITH_PADDING;
+        if (primitive->mode == pooling_mode::average && past_input && no_padding) {
+            pp.divMode = kernel_selector::kernel_divider_mode::DYNAMIC;
         } else {
             pp.divMode = cldnn_2_kernel_divider_mode(primitive->mode);
         }
