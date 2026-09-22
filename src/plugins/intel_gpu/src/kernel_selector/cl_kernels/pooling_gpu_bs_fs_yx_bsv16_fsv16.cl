@@ -47,10 +47,8 @@ KERNEL(pooling_gpu_bs_fs_yx_bsv16_fsv16)(const __global INPUT0_TYPE* input,
 
 #ifdef CHECK_BOUNDARY
     uint batch_and_feature_offset = GET_DATA_BS_FS_YX_BSV16_FSV16_INDEX(INPUT0, b, f, 0, 0);
-    if (offset_x + POOL_SIZE_X < 0 || offset_x >= INPUT0_SIZE_X || offset_y + POOL_SIZE_Y < 0 ||
-        offset_y >= INPUT0_SIZE_Y) {
-        return;
-    }
+    // No early exit for a window fully in the padding: the loops below skip every read
+    // and the result stays INIT_VAL, while an exit would leave the output unwritten.
 
 #ifdef DYNAMIC_KERNEL_DIVIDER
     uint num_elements = 0;

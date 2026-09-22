@@ -92,12 +92,8 @@ KERNEL(pooling_gpu_int8_ref)(
     ACCUMULATOR_TYPE result = INIT_VAL;
 
 #ifdef CHECK_BOUNDARY
-    if (offset_x + POOL_SIZE_X < 0 || offset_x >= INPUT0_SIZE_X ||
-        offset_y + POOL_SIZE_Y < 0 || offset_y >= INPUT0_SIZE_Y ||
-        offset_z + POOL_SIZE_Z < 0 || offset_z >= INPUT0_SIZE_Z)
-    {
-        return;
-    }
+    // No early exit for a window fully in the padding: the loops below skip every read
+    // and the result stays INIT_VAL, while an exit would leave the output unwritten.
 
 #ifdef DYNAMIC_KERNEL_DIVIDER
     uint num_elementes = 0;
