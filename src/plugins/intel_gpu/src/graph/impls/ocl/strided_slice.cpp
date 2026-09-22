@@ -208,6 +208,9 @@ public:
                 };
                 bool should_clamp_begin = check_out_of_bounds(begin);
                 bool should_clamp_end = check_out_of_bounds(end);
+                // A begin below the tensor clamps to the first element, which is where a
+                // reverse walk has to start. Only a begin above the tensor needs a step back.
+                bool begin_is_above = begin >= out_shape[dim];
 
                 // Convert a negative value which means reverse indexing from the end
                 if (begin < 0) {
@@ -233,7 +236,7 @@ public:
                     // sub: begin=-1; end=100;
                     // swap: begin=100; end=-1;
                     // So the kernel will put the slices [99, 0] in reversed order as expected.
-                    if (should_clamp_begin) {
+                    if (should_clamp_begin && begin_is_above) {
                         begin--;
                     }
                     if (should_clamp_end) {
