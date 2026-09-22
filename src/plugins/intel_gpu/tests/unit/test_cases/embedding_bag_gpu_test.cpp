@@ -1583,3 +1583,49 @@ TEST(embedding_bag_fp32_gpu, extended5_6) {
 TEST(export_import_embedding_bag_fp32_gpu, extended5_6) {
     test_embedding_bag_fp32_gpu_extended5_6<float>(true);
 }
+
+TEST(embedding_bag_fp32_gpu, offsets_sum_single_bag_of_two) {
+    //  emb_table : 3x2
+    //  indices : 2x1
+    //  offsets : 1x1
+    //  Output : 1x2, the sum of the first two rows
+    auto& engine = get_test_engine();
+
+    auto emb_table = engine.allocate_memory({ data_types::f32, format::bfyx, { 3, 2, 1, 1 } });
+    auto indices = engine.allocate_memory({ data_types::i32, format::bfyx, { 2, 1, 1, 1 } });
+    auto offsets = engine.allocate_memory({ data_types::i32, format::bfyx, { 1, 1, 1, 1 } });
+    tensor output_shape = {1, 2, 1, 1};
+
+    set_values(emb_table, {
+            1.0f, 2.0f,
+            3.0f, 4.0f,
+            5.0f, 6.0f
+    });
+    set_values<int32_t>(indices, { 0, 1 });
+    set_values<int32_t>(offsets, { 0 });
+
+    topology topology;
+    topology.add(input_layout("Input0", emb_table->get_layout()));
+    topology.add(input_layout("Input1", indices->get_layout()));
+    topology.add(input_layout("Input2", offsets->get_layout()));
+    topology.add(
+            embedding_bag("embedding_bag", { input_info("Input0"), input_info("Input1"), input_info("Input2") },
+                          embedding_bag::offsets_sum, output_shape)
+    );
+    network network(engine, topology, get_test_default_config(engine));
+
+    network.set_input_data("Input0", emb_table);
+    network.set_input_data("Input1", indices);
+    network.set_input_data("Input2", offsets);
+
+    auto outputs = network.execute();
+
+    auto output = outputs.at("embedding_bag").get_memory();
+    cldnn::mem_lock<float, mem_lock_type::read> output_ptr(output, get_test_stream());
+
+    std::vector<float> expected_results = { 4.0f, 6.0f };
+
+    for (size_t i = 0; i < expected_results.size(); ++i) {
+        ASSERT_TRUE(are_equal(expected_results[i], output_ptr[i])) << i;
+    }
+}
