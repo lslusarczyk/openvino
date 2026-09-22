@@ -80,7 +80,36 @@ struct PoolingImplementationManager : public ImplementationManager {
             return false;
         }
 
+        if (has_window_fully_in_padding(node, in_layout, out_layout)) {
+            return false;
+        }
+
         return is_supported_post_ops(node);
+    }
+
+    // A ceil rounded output can hold a window that starts past the last input element.
+    // onednn has no padding that wide, so such a case goes to another implementation.
+    static bool has_window_fully_in_padding(const program_node& node, const layout& in_layout, const layout& out_layout) {
+        const auto prim = node.as<pooling>().get_primitive();
+        if (prim->auto_pad != ov::op::PadType::EXPLICIT || in_layout.is_dynamic() || out_layout.is_dynamic()) {
+            return false;
+        }
+
+        const auto spatial_count = std::min(prim->size.size(), prim->stride.size());
+        for (size_t i = 0; i < spatial_count; i++) {
+            const auto axis = spatial_count - 1 - i;
+            const auto input_size = in_layout.spatial(static_cast<size_t>(axis));
+            const auto output_size = out_layout.spatial(static_cast<size_t>(axis));
+            const auto kernel = static_cast<int>(prim->size[i]);
+            const auto stride = static_cast<int>(prim->stride[i]);
+            const auto dilation = i < prim->dilation.size() ? static_cast<int>(prim->dilation[i]) : 1;
+            const auto pad_begin = i < prim->pads_begin.size() ? static_cast<int>(prim->pads_begin[i]) : 0;
+            const auto pad_end = (output_size - 1) * stride - input_size + (kernel - 1) * dilation + 1 - pad_begin;
+            if (pad_begin >= kernel || pad_end >= kernel) {
+                return true;
+            }
+        }
+        return false;
     }
 };
 
