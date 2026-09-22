@@ -46,7 +46,11 @@ KERNEL(cum_sum_ref)(
 #endif
 
     INPUT0_TYPE res = INPUT0_VAL_ZERO;
-    for (; axes[AXIS] < stop_ind; ++axes[AXIS]) {
+    // The loop counts from zero, not from the start index. A loop that starts at a work
+    // item value and stops at a small constant reads the first element every pass.
+    const int start_ind = axes[AXIS];
+    for (int i = 0; start_ind + i < stop_ind; ++i) {
+        axes[AXIS] = start_ind + i;
         uint ind = FUNC_CALL(get_input_index)(OPTIONAL_SHAPE_INFO_TENSOR axes[0], axes[1], axes[2], axes[3], axes[4], axes[5]);
         res += input[ind];
     }
