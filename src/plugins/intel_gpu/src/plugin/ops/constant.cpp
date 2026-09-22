@@ -23,6 +23,7 @@
 #include "openvino/op/convolution.hpp"
 #include "openvino/op/deformable_convolution.hpp"
 #include "openvino/op/gather.hpp"
+#include "openvino/op/gather_elements.hpp"
 #include "openvino/op/gather_nd.hpp"
 #include "openvino/op/group_conv.hpp"
 #include "openvino/op/loop.hpp"
@@ -36,6 +37,9 @@
 #include "openvino/op/tensor_iterator.hpp"
 #include "openvino/op/util/binary_elementwise_bitwise.hpp"
 #include "openvino/op/util/op_types.hpp"
+#include "openvino/op/util/scatter_base.hpp"
+#include "openvino/op/util/scatter_elements_update_base.hpp"
+#include "openvino/op/util/scatter_nd_base.hpp"
 #include "openvino/op/variadic_split.hpp"
 #include "ov_ops/moe_compressed.hpp"
 
@@ -215,7 +219,7 @@ static void CreateConstantOp(ProgramBuilder& p, const std::shared_ptr<ov::op::v0
     };
     // WA to inconsistency between input and const 1d tensors
     // For Concat along batch we go with batch interpretation
-    // For Gather input we go with batch interpretation
+    // For gather and scatter inputs we go with batch interpretation, as their kernels index the data by batch
     // Also check if constant users is a backprop convolution - in that case O and I need to be swapped.
     for (const auto& node : constUsers) {
         auto* outOp = node.get_node();
@@ -245,7 +249,9 @@ static void CreateConstantOp(ProgramBuilder& p, const std::shared_ptr<ov::op::v0
                    is_convert_into_binary_eltwise(outOp)) {
             consts[op].needsBatchInterpretation = constDims.size() == 1;
         } else if (ov::is_type<ov::op::v1::Gather>(outOp) || ov::is_type<ov::op::v7::Gather>(outOp) || ov::is_type<ov::op::v8::Gather>(outOp) ||
-                   ov::is_type<ov::op::v5::GatherND>(outOp) || ov::is_type<ov::op::v8::GatherND>(outOp) || ov::is_type<ov::op::v1::Split>(outOp) ||
+                   ov::is_type<ov::op::v5::GatherND>(outOp) || ov::is_type<ov::op::v8::GatherND>(outOp) || ov::is_type<ov::op::v6::GatherElements>(outOp) ||
+                   ov::is_type<ov::op::util::ScatterBase>(outOp) || ov::is_type<ov::op::util::ScatterNDBase>(outOp) ||
+                   ov::is_type<ov::op::util::ScatterElementsUpdateBase>(outOp) || ov::is_type<ov::op::v1::Split>(outOp) ||
                    ov::is_type<ov::op::v1::VariadicSplit>(outOp)) {
             consts[op].needsBatchInterpretation = constDims.size() == 1;
         } else if (ov::is_type<ov::op::v0::PRelu>(outOp) && node.get_index() == 1) {
