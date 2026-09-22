@@ -95,12 +95,8 @@ KERNEL(pooling_gpu)(
 #endif
 
 #ifdef CHECK_BOUNDARY
-    if (offset_x + POOL_SIZE_X < 0 || offset_x >= INPUT0_SIZE_X ||
-        offset_y + POOL_SIZE_Y < 0 || offset_y >= INPUT0_SIZE_Y ||
-        offset_z + POOL_SIZE_Z < 0 || offset_z >= INPUT0_SIZE_Z)
-    {
-        return;
-    }
+    // A window can lie fully in the padding. The loops below then skip every read and
+    // the result stays INIT_VAL. An early exit here would leave the output unwritten.
 
 #ifdef DYNAMIC_KERNEL_DIVIDER
     uint num_elementes = 0;
