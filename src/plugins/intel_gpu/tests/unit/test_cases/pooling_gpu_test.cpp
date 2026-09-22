@@ -558,6 +558,61 @@ TEST(pooling_forward_gpu, offsets_max_yxfb_f32_wsiz2x2_wstr2x2_i2x2x1x1_zeropad)
     ASSERT_EQ( 0.5f, output_ptr[3]);
 }
 
+// A window as small as the padding lands fully in the padding for every border
+// output, so such an output has no input element at all. It is still an output and
+// has to hold the value of a window of padding: the lowest value for max pooling.
+TEST(pooling_forward_gpu, offsets_max_bfyx_f32_wsiz1x1_wstr1x1_i2x2x1x1_zeropad) {
+    //  Pool window: 1x1
+    //  Pool stride: 1x1
+    //  Pool mode: max
+    //  Padding: zero
+    //
+    //  Input offset : -1x-1
+    //  Input data:
+    //  [ padd, padd, padd, padd]
+    //  [ padd,  1.5, -0.5, padd]
+    //  [ padd, -1.0,  0.5, padd]
+    //  [ padd, padd, padd, padd]
+    //
+    //  Expected output, with min for the lowest float:
+    //  [  min,  min,  min,  min]
+    //  [  min,  1.5, -0.5,  min]
+    //  [  min, -1.0,  0.5,  min]
+    //  [  min,  min,  min,  min]
+
+    auto& engine = get_test_engine();
+
+    auto input_prim = engine.allocate_memory({ data_types::f32, format::bfyx, { 1, 1, 2, 2 } });
+
+    topology topology;
+    topology.add(input_layout("input_prim", input_prim->get_layout()));
+    topology.add(pooling("pool_prim", input_info("input_prim"), pooling_mode::max, {1, 1}, {1, 1}, {1, 1}, {1, 1}));
+
+    auto config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+
+    network network(engine, topology, config);
+    set_values(input_prim, { 1.50f, -0.50f, -1.00f, 0.50f });
+    network.set_input_data("input_prim", input_prim);
+
+    auto outputs = network.execute();
+    auto output_prim = outputs.at("pool_prim").get_memory();
+
+    const float min = std::numeric_limits<float>::lowest();
+    const std::vector<float> expected = {
+        min,    min,    min,  min,
+        min,  1.50f, -0.50f,  min,
+        min, -1.00f,  0.50f,  min,
+        min,    min,    min,  min,
+    };
+
+    cldnn::mem_lock<float> output_ptr (output_prim, get_test_stream());
+    ASSERT_EQ(expected.size(), output_ptr.size());
+    for (size_t i = 0; i < expected.size(); i++) {
+        ASSERT_EQ(expected[i], output_ptr[i]) << "at " << i;
+    }
+}
+
 TEST(pooling_forward_gpu, offsets_max_yxfb_f32_wsiz2x2_wstr2x2_i3x3x1x1_zeropad) {
     //  Brief test description.
     //
