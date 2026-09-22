@@ -4,11 +4,32 @@
 
 #include "mvn_kernel_base.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "kernel_selector_utils.h"
 
 namespace kernel_selector {
+
+namespace {
+// The kernels scale the input by the reciprocal of the deviation. In half precision
+// that reciprocal becomes infinity for a small epsilon, so a zero variance gives a NaN.
+float get_epsilon(const mvn_params& params) {
+    if (params.epsilon <= 0.f) {
+        return params.epsilon;
+    }
+
+    if (params.inputs[0].GetDType() != Datatype::F16 && params.outputs[0].GetDType() != Datatype::F16) {
+        return params.epsilon;
+    }
+
+    constexpr float half_max = 65504.f;
+    const float min_epsilon = params.mvnEpsMode == MVNEpsMode::INSIDE_SQRT ? 1.f / (half_max * half_max)
+                                                                          : 1.f / half_max;
+
+    return std::max(params.epsilon, min_epsilon);
+}
+}  // namespace
 
 bool MVNKernelBase::Validate(const Params& params) const {
     const mvn_params& orgParams = static_cast<const mvn_params&>(params);
@@ -26,7 +47,7 @@ JitConstants MVNKernelBase::GetJitConstants(const mvn_params& params, MVNKernelB
     JitConstants jit = MakeBaseParamsJitConstants(params);
 
     jit.AddConstants({
-        MakeJitConstant("EPSILON", params.epsilon),
+        MakeJitConstant("EPSILON", get_epsilon(params)),
         MakeJitConstant(toString(params.mvnMode), ""),
         MakeJitConstant("NORMALIZE_VARIANCE", params.mvnNormalizeVariance),
         MakeJitConstant("EPS_" + toString(params.mvnEpsMode), ""),
