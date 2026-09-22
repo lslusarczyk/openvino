@@ -713,9 +713,12 @@ TEST(pooling_forward_gpu, offsets_avg_bfyx_f32_wsiz3x3_wstr3x3_i1x1x3x3_zeropad)
     //  [ padd,  0.9,  1.1,  2.2, padd]
     //  [ padd, padd, padd, padd, padd]
     //
+    //  The primitive has padding, so the average counts the padding and every window
+    //  divides by the kernel size of nine, also the window that reaches past the padding.
+    //
     //  Expected output:
-    //  [ 0.177777, -0.133333]
-    //  [ 0.333333,  0.55]
+    //  [ 0.177777, -0.088888]
+    //  [ 0.222222,  0.244444]
 
     auto& engine = get_test_engine();
 
@@ -745,9 +748,9 @@ TEST(pooling_forward_gpu, offsets_avg_bfyx_f32_wsiz3x3_wstr3x3_i1x1x3x3_zeropad)
     cldnn::mem_lock<float> output_ptr (output_prim, get_test_stream());
 
     ASSERT_NEAR(output_ptr[0], 0.177777f, 1e-05F);
-    ASSERT_NEAR(output_ptr[1], -0.133333f, 1e-05F);
-    ASSERT_NEAR(output_ptr[2], 0.333333f, 1e-05F);
-    ASSERT_NEAR(output_ptr[3], 0.55f, 1e-05F);
+    ASSERT_NEAR(output_ptr[1], -0.088888f, 1e-05F);
+    ASSERT_NEAR(output_ptr[2], 0.222222f, 1e-05F);
+    ASSERT_NEAR(output_ptr[3], 0.244444f, 1e-05F);
 }
 
 TEST(pooling_forward_gpu, offsets_avg_yxfb_f32_wsiz2x2_wstr2x2_i3x3x1x1_zeropad) {
@@ -3409,4 +3412,48 @@ TEST_P(pooling_random_test_fp16_fp32, avg_fp32_cached) {
 TEST_P(pooling_random_test_fp16_fp32, max_fp32_cached) {
     auto test_case = pooling_random_test_base<float, pooling_mode::max>();
     ASSERT_NO_FATAL_FAILURE(test_case.run_random(GetParam(), true));
+}
+
+// With padding the average counts the padding as a value, so every window divides
+// by the kernel size, also the window that the ceil mode puts past the padding.
+TEST(pooling_forward_gpu, avg_bfyx_f32_ceil_window_past_padding) {
+    //  Input 4x4, kernel 3x2, stride 2x2, padding 1 row above and below.
+    //  The last row of windows starts at row 3 and reaches two rows past the input,
+    //  one of them past the padding as well. The divisor stays six.
+
+    auto& engine = get_test_engine();
+
+    auto input_prim = engine.allocate_memory({ data_types::f32, format::bfyx, { 1, 1, 4, 4 } });
+
+    topology topology;
+    topology.add(input_layout("input_prim", input_prim->get_layout()));
+    topology.add(pooling("pool_prim", input_info("input_prim"), pooling_mode::average, {3, 2}, {2, 2},
+                         {1, 0}, {1, 0}, ov::op::PadType::EXPLICIT, ov::op::RoundingType::CEIL));
+
+    auto config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+
+    network network(engine, topology, config);
+    set_values(input_prim, {
+         1.0f,  2.0f,  3.0f,  4.0f,
+         5.0f,  6.0f,  7.0f,  8.0f,
+         9.0f, 10.0f, 11.0f, 12.0f,
+        13.0f, 14.0f, 15.0f, 16.0f,
+    });
+    network.set_input_data("input_prim", input_prim);
+
+    auto outputs = network.execute();
+    auto output_prim = outputs.at("pool_prim").get_memory();
+
+    const std::vector<float> expected = {
+        (1.f + 2.f + 5.f + 6.f) / 6.f,      (3.f + 4.f + 7.f + 8.f) / 6.f,
+        (5.f + 6.f + 9.f + 10.f + 13.f + 14.f) / 6.f, (7.f + 8.f + 11.f + 12.f + 15.f + 16.f) / 6.f,
+        (13.f + 14.f) / 6.f,                (15.f + 16.f) / 6.f,
+    };
+
+    cldnn::mem_lock<float> output_ptr(output_prim, get_test_stream());
+    ASSERT_EQ(expected.size(), output_ptr.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        ASSERT_NEAR(expected[i], output_ptr[i], 1e-5f) << i;
+    }
 }
