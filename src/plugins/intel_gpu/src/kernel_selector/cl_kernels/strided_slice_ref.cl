@@ -239,6 +239,10 @@ KERNEL(strided_slice_ref)(OPTIONAL_SHAPE_INFO_ARG
     end_x = SLICE_END_X;
 #endif // END_TYPE
 
+// Constant begin and end are already made positive and clamped on the host, where an
+// end below the first element becomes -1. Reading that -1 as a distance from the end
+// again would move the start of a reversed slice, so only runtime values are handled.
+#if defined(BEGIN_TYPE) || defined(END_TYPE) || defined(STRIDE_TYPE)
 #ifdef SHRINK_MODE
     FUNC_CALL(calculate_index)(&step_batch, &begin_batch, &end_batch, INPUT0_BATCH_NUM, SHRINK_BATCH);
     FUNC_CALL(calculate_index)(&step_feature, &begin_feature, &end_feature, INPUT0_FEATURE_NUM, SHRINK_FEATURE);
@@ -272,6 +276,7 @@ KERNEL(strided_slice_ref)(OPTIONAL_SHAPE_INFO_ARG
     FUNC_CALL(calculate_index)(&step_x, &begin_x, &end_x, INPUT0_SIZE_X);
 #endif // OUTPUT_LAYOUT_BFYX
 #endif // SHRINK_MODE
+#endif // runtime begin, end or stride
 
     const int slice_begin_batch = begin_batch;
     const int slice_begin_feature = begin_feature;
