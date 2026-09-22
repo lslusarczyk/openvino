@@ -11,6 +11,11 @@
 
 namespace kernel_selector {
 namespace {
+bool IsIntegerType(Datatype type) {
+    return type == Datatype::INT8 || type == Datatype::UINT8 || type == Datatype::INT16 || type == Datatype::UINT16 ||
+           type == Datatype::INT32 || type == Datatype::UINT32 || type == Datatype::INT64;
+}
+
 std::vector<size_t> GetLimitedOptimalLocalWorkGroupSizes(std::vector<size_t> gws, const EngineInfo& info, std::vector<size_t> limited_size_lws) {
     const size_t lws_max = info.maxWorkGroupSize;
     const size_t optimal_lws_values[] = {256, 227, 224, 192, 160, 128, 96, 64, 32, 16, 8, 7, 6, 5, 4, 3, 2, 1};
@@ -286,16 +291,10 @@ JitConstants EltwiseKernelBase::GetOperationsJitConstants(const eltwise_params& 
             auto input_0_type = params.inputs[0].GetDType();
             auto input_1_type = params.inputs[1].GetDType();
 
-            auto is_integer_type = [](kernel_selector::Datatype type) {
-                return type == kernel_selector::Datatype::INT8 || type == kernel_selector::Datatype::UINT8 || type == kernel_selector::Datatype::INT16 ||
-                       type == kernel_selector::Datatype::UINT16 || type == kernel_selector::Datatype::INT32 || type == kernel_selector::Datatype::UINT32 ||
-                       type == kernel_selector::Datatype::INT64;
-            };
-
             // input_0 == int
-            if (is_integer_type(input_0_type)) {
+            if (IsIntegerType(input_0_type)) {
                 // input_0 == int && input_1 == int
-                if (is_integer_type(input_1_type)) {
+                if (IsIntegerType(input_1_type)) {
                     if (ew.mode == EltwiseMode::MODULU) {
                         op += input0_str + " % " + input1_str;
                     } else {
@@ -305,7 +304,7 @@ JitConstants EltwiseKernelBase::GetOperationsJitConstants(const eltwise_params& 
                     // input_0 == int && input_1 != int
                     op += cast_type + "f" + mode + "(convert_float(" + input0_str + "), " + input1_str + ")";
                 }
-            } else if (is_integer_type(input_1_type)) {
+            } else if (IsIntegerType(input_1_type)) {
                 // input_0 != int && input_1 == int
                 op += cast_type + "f" + mode + "(" + input0_str + ", convert_float(" + input1_str + "))";
             } else {
@@ -360,16 +359,15 @@ JitConstants EltwiseKernelBase::GetOperationsJitConstants(const eltwise_params& 
             op += "(!" + input0_str + " != !" + input1_str + ")";
             break;
         case EltwiseMode::FLOOR_MOD: {
+            // the result takes the sign of the divisor, so the quotient is rounded down, not to zero
             auto input_0_type = params.inputs[0].GetDType();
             auto input_1_type = params.inputs[1].GetDType();
-            if (input_0_type == input_1_type && (input_0_type == kernel_selector::Datatype::F16 || input_0_type == kernel_selector::Datatype::BF16 ||
-                                                 input_0_type == kernel_selector::Datatype::F32)) {
-                op += "fmod(" + input0_str + ", " + input1_str + ")";
-            } else if (input_1_type == kernel_selector::Datatype::F16 || input_1_type == kernel_selector::Datatype::BF16 ||
-                       input_1_type == kernel_selector::Datatype::F32) {
-                op += "(" + input0_str + " - trunc(" + input0_str + " / " + input1_str + ") * " + input1_str + ")";
+            if (IsIntegerType(input_0_type) && IsIntegerType(input_1_type)) {
+                op += "((" + input0_str + " % " + input1_str + " + " + input1_str + ") % " + input1_str + ")";
+            } else if (IsIntegerType(input_1_type)) {
+                op += "(" + input0_str + " - floor(" + input0_str + " / convert_float(" + input1_str + ")) * " + input1_str + ")";
             } else {
-                op += "(" + input0_str + " - trunc(" + input0_str + " / convert_float(" + input1_str + ")) * " + input1_str + ")";
+                op += "(" + input0_str + " - floor(" + input0_str + " / " + input1_str + ") * " + input1_str + ")";
             }
             break;
         }
