@@ -2678,6 +2678,60 @@ TEST(eltwise_gpu_int, basic_in4x4x4x4) {
     }
 }
 
+// floor_mod rounds the quotient down, so the result takes the sign of the divisor.
+// Only operands of unlike sign tell it apart from mod, which rounds toward zero.
+TEST(eltwise_gpu_f32, floor_mod_operands_of_unlike_sign) {
+    auto& engine = get_test_engine();
+
+    auto input1 = engine.allocate_memory({ data_types::f32, format::bfyx, { 1, 1, 4, 1 } });
+    auto input2 = engine.allocate_memory({ data_types::f32, format::bfyx, { 1, 1, 4, 1 } });
+    set_values(input1, { -7.0f, 7.0f, -0.5f, -7.0f });
+    set_values(input2, {  3.0f, -3.0f, 2.0f, -3.0f });
+
+    topology topology;
+    topology.add(input_layout("input1", input1->get_layout()));
+    topology.add(input_layout("input2", input2->get_layout()));
+    topology.add(eltwise("eltwise", { input_info("input1"), input_info("input2") }, eltwise_mode::floor_mod));
+
+    network network(engine, topology, get_test_default_config(engine));
+    network.set_input_data("input1", input1);
+    network.set_input_data("input2", input2);
+    auto outputs = network.execute();
+
+    const std::vector<float> expected = { 2.0f, -2.0f, 1.5f, -1.0f };
+    cldnn::mem_lock<float, mem_lock_type::read> output_ptr(outputs.at("eltwise").get_memory(), get_test_stream());
+    ASSERT_EQ(expected.size(), output_ptr.size());
+    for (size_t i = 0; i < expected.size(); i++) {
+        ASSERT_TRUE(are_equal(expected[i], output_ptr[i])) << "at " << i;
+    }
+}
+
+TEST(eltwise_gpu_int, floor_mod_operands_of_unlike_sign) {
+    auto& engine = get_test_engine();
+
+    auto input1 = engine.allocate_memory({ data_types::i32, format::bfyx, { 1, 1, 4, 1 } });
+    auto input2 = engine.allocate_memory({ data_types::i32, format::bfyx, { 1, 1, 4, 1 } });
+    set_values(input1, { -7, 7, -1, -7 });
+    set_values(input2, {  3, -3, 2, -3 });
+
+    topology topology;
+    topology.add(input_layout("input1", input1->get_layout()));
+    topology.add(input_layout("input2", input2->get_layout()));
+    topology.add(eltwise("eltwise", { input_info("input1"), input_info("input2") }, eltwise_mode::floor_mod));
+
+    network network(engine, topology, get_test_default_config(engine));
+    network.set_input_data("input1", input1);
+    network.set_input_data("input2", input2);
+    auto outputs = network.execute();
+
+    const std::vector<int32_t> expected = { 2, -2, 1, -1 };
+    cldnn::mem_lock<int32_t, mem_lock_type::read> output_ptr(outputs.at("eltwise").get_memory(), get_test_stream());
+    ASSERT_EQ(expected.size(), output_ptr.size());
+    for (size_t i = 0; i < expected.size(); i++) {
+        ASSERT_EQ(expected[i], output_ptr[i]) << "at " << i;
+    }
+}
+
 TEST(eltwise_gpu_int, i8_overflow_wraparound) {
     // Test that int8 eltwise operations correctly wrap around on overflow
     // instead of saturating. This tests values that overflow the [-128, 127] range.
