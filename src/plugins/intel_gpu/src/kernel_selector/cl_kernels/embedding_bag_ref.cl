@@ -60,14 +60,16 @@ KERNEL(embedding_bag_ref)(
                             INPUT1_LENGTH;
 
     OUTPUT_TYPE res = OUTPUT_VAL_ZERO;
-    for (int i = start_indices; i < end_indices; ++i)
+    // work around a compiler defect: a loop that starts at a run time value and stops at a
+    // constant bound of two keeps the loop variable at the start, so count from zero instead
+    for (uint i = 0; start_indices + i < end_indices; ++i)
     {
-        uint indices_index = INPUT1_OFFSET + i;
+        uint indices_index = INPUT1_OFFSET + start_indices + i;
         uint emb_index = INPUT0_GET_INDEX(indices[indices_index], emb_dim1, emb_dim2, emb_dim3);
         OUTPUT_TYPE val = emb_table[emb_index];
 #ifdef INPUT3_TYPE
         {
-            uint weight_index = INPUT3_OFFSET + i;
+            uint weight_index = INPUT3_OFFSET + start_indices + i;
             val *= weights[weight_index];
         }
 #endif
