@@ -1326,6 +1326,10 @@ void TransformationsPipeline::apply(std::shared_ptr<ov::Model> func) {
             const auto norm = ov::as_type_ptr<const ov::op::v0::NormalizeL2>(node);
             const auto inputRank = norm->get_input_partial_shape(0).size();
             auto axesNode = ov::as_type_ptr<const ov::op::v0::Constant>(norm->get_input_node_shared_ptr(1));
+            if (!axesNode) {
+                // the plugin primitive needs the axes at build time, so decompose instead
+                return false;
+            }
             const auto axes = axesNode->cast_vector<size_t>();
             const auto isSupportedAxes = [](const std::vector<size_t> &axes, const size_t inputRank) {
                 if (axes.size() == 1 && axes[0] == 1) {
