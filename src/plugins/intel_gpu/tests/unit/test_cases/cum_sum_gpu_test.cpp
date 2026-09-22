@@ -359,6 +359,33 @@ TEST(cum_sum_gpu_fp32, dynamic) {
     }
 }
 
+// An axis of two elements gives the reverse sum a loop of one or two passes. The other
+// cases here all use five, so they never take that path.
+TEST(cum_sum_gpu_fp32, reverse_over_axis_of_two) {
+    auto& engine = get_test_engine();
+    const std::vector<float> input_data = {10.f, 20.f, 30.f, 40.f, 50.f, 60.f, 70.f, 80.f};
+    const layout in_layout{data_types::f32, format::bfyx, tensor{2, 2, 1, 2}};
+    auto input = engine.allocate_memory(in_layout);
+    set_values(input, input_data);
+
+    topology topology;
+    topology.add(input_layout("input", in_layout));
+    topology.add(cum_sum("cum_sum", input_info("input"), 2, false, true));
+
+    network network(engine, topology, get_test_default_config(engine));
+    network.set_input_data("input", input);
+    auto outputs = network.execute();
+
+    auto output = outputs.at("cum_sum").get_memory();
+    cldnn::mem_lock<float, mem_lock_type::read> output_ptr(output, get_test_stream());
+
+    const auto answers = cumsum(input_data, format::bfyx, {2, 2, 1, 1, 2, 1}, 2, false, true);
+    ASSERT_EQ(output->count(), answers.size());
+    for (size_t i = 0; i < answers.size(); ++i) {
+        ASSERT_TRUE(are_equal(answers[i], output_ptr[i])) << i;
+    }
+}
+
 TEST(cum_sum_partial, big_shapes) {
     auto& engine = get_test_engine();
 
