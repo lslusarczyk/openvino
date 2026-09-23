@@ -90,6 +90,20 @@ std::map<std::vector<ov::Shape>, std::vector<ov::Shape>> preluBasic = {
         {{{24}}, {{1}}},
 };
 
+// One slope value cannot show a mix-up of the slope axis, an empty value list makes the
+// test fill the slope with a different value for every channel
+const std::map<ActivationTypes, std::vector<std::vector<float>>> preluPerChannelType = {
+        {ActivationTypes::PReLu, {{}}},
+};
+
+// The plugin takes another path for the slope layout when the input shape is dynamic
+std::vector<std::pair<std::vector<ov::test::InputShape>, ov::Shape>> preluDynamic = {
+        {{ov::test::InputShape{{-1, 10, 20}, {{1, 10, 20}, {2, 10, 20}}}}, ov::Shape{10}},
+        {{ov::test::InputShape{{-1, -1, -1}, {{1, 10, 20}}}}, ov::Shape{10}},
+        {{ov::test::InputShape{{-1, 4, 5, 3}, {{2, 4, 5, 3}}}}, ov::Shape{4}},
+        {{ov::test::InputShape{{-1, 4, 2, 5, 3}, {{2, 4, 2, 5, 3}}}}, ov::Shape{4}},
+};
+
 auto static_shapes_param_transform = [](const std::vector<std::pair<std::vector<ov::Shape>, ov::Shape>>& original_shapes) {
     std::vector<std::pair<std::vector<ov::test::InputShape>, ov::Shape>> new_shapes;
     for (const auto& shape_element : original_shapes) {
@@ -114,6 +128,14 @@ const auto basicPreluCases = []() {
         ::testing::Values(ov::test::utils::DEVICE_GPU));
 };
 
+const auto dynamicPreluCases = []() {
+    return ::testing::Combine(
+        ::testing::ValuesIn(ov::test::utils::combineParams(preluPerChannelType)),
+        ::testing::Values(ov::element::f32),
+        ::testing::ValuesIn(preluDynamic),
+        ::testing::Values(ov::test::utils::DEVICE_GPU));
+};
+
 const auto big_rank_cases = []() {
     return ::testing::Combine(
         ::testing::ValuesIn(ov::test::utils::combineParams(big_rank_activation_types)),
@@ -127,6 +149,8 @@ INSTANTIATE_TEST_SUITE_P(smoke_Activation_Basic, ActivationLayerTest, basicCases
 INSTANTIATE_TEST_SUITE_P(Activation_BigRanks, ActivationLayerTest, big_rank_cases(), ActivationLayerTest::getTestCaseName);
 
 INSTANTIATE_TEST_SUITE_P(smoke_Activation_Basic_Prelu, ActivationLayerTest, basicPreluCases(), ActivationLayerTest::getTestCaseName);
+
+INSTANTIATE_TEST_SUITE_P(smoke_Activation_Prelu_Dynamic, ActivationLayerTest, dynamicPreluCases(), ActivationLayerTest::getTestCaseName);
 
 INSTANTIATE_TEST_SUITE_P(smoke_Activation_Basic, ActivationParamLayerTest, basicPreluCases(), ActivationLayerTest::getTestCaseName);
 
