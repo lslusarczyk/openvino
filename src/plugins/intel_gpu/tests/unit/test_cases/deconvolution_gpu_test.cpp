@@ -2159,6 +2159,39 @@ TEST(deconvolution_f32_fw_gpu, basic_wsiz2x2_in2x2x1x1_pad1_b_fs_yx_fsv16_dw) {
 }
 
 
+TEST(deconvolution_f32_fw_gpu, basic_wsiz1x1_in3x3x1x1_pad1_trims_output) {
+    auto& engine = get_test_engine();
+
+    auto input = engine.allocate_memory({ data_types::f32, format::bfyx, { 1, 1, 3, 3 } });
+    auto weights = engine.allocate_memory({ data_types::f32, format::bfyx, { 1, 1, 1, 1 } });
+
+    set_values(input, { 1.f, 2.f, 3.f,
+                        4.f, 5.f, 6.f,
+                        7.f, 8.f, 9.f });
+    set_values(weights, { 2.f });
+
+    topology topology(
+        input_layout("input", input->get_layout()),
+        data("weights", weights),
+        deconvolution("deconv", input_info("input"), "weights", "", 1, ov::Strides{ 1, 1 }, ov::CoordinateDiff{ 1, 1 })
+    );
+
+    ExecutionConfig config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::optimize_data(true));
+
+    network network(engine, topology, config);
+    network.set_input_data("input", input);
+
+    auto outputs = network.execute();
+    auto output_prim = outputs.at("deconv").get_memory();
+
+    ASSERT_EQ(output_prim->get_layout().spatial(0), 1);
+    ASSERT_EQ(output_prim->get_layout().spatial(1), 1);
+
+    cldnn::mem_lock<float> output_ptr(output_prim, get_test_stream());
+    ASSERT_FLOAT_EQ(10.f, output_ptr[0]);
+}
+
 TEST(deconvolution_f32_fw_gpu, basic_wsiz2x2_in2x2x1x1_stride2_nopad_b_fs_yx_fsv16_dw) {
     auto& engine = get_test_engine();
 

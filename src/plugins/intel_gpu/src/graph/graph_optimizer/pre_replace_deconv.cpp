@@ -75,16 +75,6 @@ void pre_replace_deconv::run(program& p) {
                 auto output_padding = deconv_prim->output_paddings[0];
                 auto grouped_weights_shape = deconv_prim->grouped_weights_shape;
 
-                // remove deconvolution node and its connections to weights and biases, rename it and move to the optimized list
-                p.remove_connection(input_node, deconv_node);
-                std::vector<std::shared_ptr<program_node>> weight_connections;
-                auto weights_iter = p.nodes_map.find(weights_nodes_id.pid);
-                OPENVINO_ASSERT(weights_iter != p.nodes_map.end());
-
-                auto weights_node_ptr = weights_iter->second;
-                weight_connections.push_back(weights_node_ptr);
-                p.remove_connection(*weights_node_ptr, deconv_node);
-
                 ov::CoordinateDiff pad_begin(spatial_rank, 0);
                 ov::CoordinateDiff pad_end(spatial_rank, 0);
 
@@ -96,6 +86,23 @@ void pre_replace_deconv::run(program& p) {
                     pad_begin[i] = (fs - 1) - std::abs(pad[i]);
                     pad_end[i] = (out_dim - 1) * stride[i] + fs - in_dim - pad_begin[i];
                 }
+
+                // a deconvolution that trims its output needs a convolution with negative padding, which no
+                // convolution implementation can do, so such a node keeps the deconvolution primitive
+                if (std::any_of(pad_begin.begin(), pad_begin.end(), [](std::ptrdiff_t v) { return v < 0; }) ||
+                    std::any_of(pad_end.begin(), pad_end.end(), [](std::ptrdiff_t v) { return v < 0; })) {
+                    continue;
+                }
+
+                // remove deconvolution node and its connections to weights and biases, rename it and move to the optimized list
+                p.remove_connection(input_node, deconv_node);
+                std::vector<std::shared_ptr<program_node>> weight_connections;
+                auto weights_iter = p.nodes_map.find(weights_nodes_id.pid);
+                OPENVINO_ASSERT(weights_iter != p.nodes_map.end());
+
+                auto weights_node_ptr = weights_iter->second;
+                weight_connections.push_back(weights_node_ptr);
+                p.remove_connection(*weights_node_ptr, deconv_node);
 
                 std::vector<std::shared_ptr<program_node>> bias_connections;
                 if (biases_nodes_id.is_valid()) {
