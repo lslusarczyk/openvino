@@ -166,11 +166,22 @@ add_fusing_type onednn_add_fusing_helpers::get_add_fusing_type(
         return add_fusing_type::not_supported;
     }
 
+    // onednn accumulates a sum post-op into the buffer of 'dep_node', so the node must not read
+    // that buffer at the same time. 'is_direct_ancestor' is true for an own input as well.
+    bool reads_dep_buffer = false;
+    for (size_t i = 0; i < desc.outer_dep_start_idx; i++) {
+        if (&p_node.get_dependency(i) == &dep_node) {
+            reads_dep_buffer = true;
+            break;
+        }
+    }
+
     if (is_full_tensor(p_layout) && is_full_tensor(d_layout)) {
         if (data_type_traits::size_of(p_layout.data_type) == data_type_traits::size_of(d_layout.data_type)
             && p_layout.format == d_layout.format && p_layout.get_tensor() == d_layout.get_tensor()
             && p_layout.data_padding == d_layout.data_padding
             && (dep_node.get_users().size() == 1 || is_direct_ancestor(p_node, dep_node))
+            && !reads_dep_buffer
             && !dep_node.is_constant()
             && !p_node.is_type<pooling>()
             && !p_node.is_output()
