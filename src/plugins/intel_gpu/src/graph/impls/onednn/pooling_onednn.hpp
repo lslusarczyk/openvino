@@ -25,6 +25,11 @@ struct PoolingImplementationManager : public ImplementationManager {
             return false;
         }
 
+        // onednn writes no indices, so opset8 MaxPool with an indices output goes to another implementation
+        if (node.as<pooling>().get_primitive()->maxPoolOpset8Features) {
+            return false;
+        }
+
         const auto& in_layout = node.get_input_layout(0);
         const auto& out_layout = node.get_output_layout(0);
         auto in_dt = in_layout.data_type;
