@@ -11,22 +11,16 @@
 #define BRING_INTO_RANGE(VAL, MAX) \
     clamp((long)VAL < 0l ? (long)VAL + (long)MAX : (long)VAL, 0l, (long)MAX - 1l);
 
-#if INPUT0_DIMS < 5
-#define LOAD_BUFFER(in_prefix, out_name)  \
-    long out_name[INPUT0_DIMS];           \
-    out_name[0] = in_prefix##_VAL0;       \
-    out_name[1] = in_prefix##_VAL1;       \
-    out_name[2] = in_prefix##_VAL2;       \
-    out_name[3] = in_prefix##_VAL3;
-#else
-#define LOAD_BUFFER(in_prefix, out_name)  \
-    long out_name[INPUT0_DIMS];           \
-    out_name[0] = in_prefix##_VAL0;       \
-    out_name[1] = in_prefix##_VAL1;       \
-    out_name[2] = in_prefix##_VAL2;       \
-    out_name[3] = in_prefix##_VAL3;       \
+// INPUT0_DIMS is the rank of the data, which can be below 4, so the buffers keep the full room
+#define SLICE_BUFFER_SIZE 5
+
+#define LOAD_BUFFER(in_prefix, out_name)     \
+    long out_name[SLICE_BUFFER_SIZE];        \
+    out_name[0] = in_prefix##_VAL0;          \
+    out_name[1] = in_prefix##_VAL1;          \
+    out_name[2] = in_prefix##_VAL2;          \
+    out_name[3] = in_prefix##_VAL3;          \
     out_name[4] = in_prefix##_VAL4;
-#endif
 
 #define VEC_SIZE    SLICE_SCATTER_VEC_SIZE
 #define SUBGROUP_SIZE get_sub_group_size()
@@ -58,8 +52,8 @@ KERNEL(slice_scatter_opt)(OPTIONAL_SHAPE_INFO_ARG
     LOAD_BUFFER(AXES, axes_buff);
 
     // Compute start offsets per dimension (step is always 1 for opt kernel)
-    long slice_start[INPUT0_DIMS];
-    unroll_for(int i = 0; i < INPUT0_DIMS; ++i) {
+    long slice_start[SLICE_BUFFER_SIZE];
+    unroll_for(int i = 0; i < SLICE_BUFFER_SIZE; ++i) {
         slice_start[i] = 0;
     }
     unroll_for(int i = 0; i < (AXES_BUFFER_SIZE < INPUT0_DIMS ? AXES_BUFFER_SIZE : INPUT0_DIMS); ++i) {
@@ -158,6 +152,7 @@ KERNEL(slice_scatter_opt)(OPTIONAL_SHAPE_INFO_ARG
 }
 
 #undef LOAD_BUFFER
+#undef SLICE_BUFFER_SIZE
 #undef BRING_INTO_RANGE
 #undef VEC_SIZE
 #undef VEC_TYPE
