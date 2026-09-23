@@ -187,7 +187,10 @@ void remove_redundant_reorders::run(program& p) {
         // for chains like
         // fp32 -> reorder -> u8 -> reorder -> fp32
         // we can't fuse two reorder primitives as first one must do cast to u8 data type which changes the values
-        if (!data_type_traits::is_floating_point(r_dep_node.get_output_layout().data_type) &&
+        // a cast to an 8 bit float type changes the values as well
+        // the 4 bit float types stay out: a reorder to them has no implementation
+        auto interm_type = ov::element::Type(r_dep_node.get_output_layout().data_type);
+        if ((!interm_type.is_real() || interm_type.bitwidth() == 8) &&
             data_type_traits::is_floating_point(r_dep_node.get_input_layout().data_type)) {
             continue;
         }
