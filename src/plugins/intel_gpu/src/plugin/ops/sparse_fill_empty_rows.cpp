@@ -16,9 +16,9 @@ static void CreateSparseFillEmptyRowsOp(ProgramBuilder& p, const std::shared_ptr
     auto inputs = p.GetInputInfo(op);
     std::string layerName = layer_type_name_ID(op);
 
-    auto indices_constant = ov::as_type_ptr<ov::op::v0::Constant>(op->get_input_node_shared_ptr(0));
-    auto values_constant = ov::as_type_ptr<ov::op::v0::Constant>(op->get_input_node_shared_ptr(1));
-    auto dense_shape_constant = ov::as_type_ptr<ov::op::v0::Constant>(op->get_input_node_shared_ptr(2));
+    auto values_constant = ov::as_type_ptr<ov::op::v0::Constant>(op->get_input_node_shared_ptr(0));
+    auto dense_shape_constant = ov::as_type_ptr<ov::op::v0::Constant>(op->get_input_node_shared_ptr(1));
+    auto indices_constant = ov::as_type_ptr<ov::op::v0::Constant>(op->get_input_node_shared_ptr(2));
     auto default_value_constant = ov::as_type_ptr<ov::op::v0::Constant>(op->get_input_node_shared_ptr(3));
 
     std::vector<int64_t> indices = indices_constant ? indices_constant->cast_vector<int64_t>() : std::vector<int64_t>{};

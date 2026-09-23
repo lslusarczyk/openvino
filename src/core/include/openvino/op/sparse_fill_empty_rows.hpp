@@ -17,13 +17,13 @@ public:
 
     /// \brief Constructs a SparseFillEmptyRows operation.
     ///
-    /// \param indices 2D tensor indicating the positions of values in the sparse tensor.
     /// \param values 1D tensor containing the values to be inserted at the specified indices.
     /// \param dense_shape 1D tensor indicating the shape of the 2D dense tensor.
+    /// \param indices 2D tensor indicating the positions of values in the sparse tensor.
     /// \param default_value Scalar value to be inserted into the empty rows.
-    SparseFillEmptyRows(const Output<Node>& indices,
-                        const Output<Node>& values,
+    SparseFillEmptyRows(const Output<Node>& values,
                         const Output<Node>& dense_shape,
+                        const Output<Node>& indices,
                         const Output<Node>& default_value);
 
     void validate_and_infer_types() override;
