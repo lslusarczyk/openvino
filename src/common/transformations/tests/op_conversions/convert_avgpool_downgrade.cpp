@@ -26,7 +26,7 @@ namespace {
 std::shared_ptr<ov::Model> create_v14_model(const ov::op::RoundingType rounding_type, const bool exclude_pad = true) {
     const auto input = std::make_shared<v0::Parameter>(ov::element::f32, ov::Shape{1, 3, 64, 64});
     const ov::Strides strides{1, 1}, dilations{1, 1};
-    const ov::Shape pads_begin{1, 1}, pads_end{1, 1}, kernel{2, 2};
+    const ov::Shape pads_begin{1, 2}, pads_end{2, 1}, kernel{3, 3};
 
     const auto avg_pool_v14 = std::make_shared<ov::op::v14::AvgPool>(input,
                                                                      strides,
@@ -45,7 +45,7 @@ std::shared_ptr<ov::Model> create_v14_model(const ov::op::RoundingType rounding_
 std::shared_ptr<ov::Model> create_v1_model(const ov::op::RoundingType rounding_type) {
     const auto input = std::make_shared<v0::Parameter>(ov::element::f32, ov::Shape{1, 3, 64, 64});
     const ov::Strides strides{1, 1}, dilations{1, 1};
-    const ov::Shape pads_begin{1, 1}, pads_end{1, 1}, kernel{2, 2};
+    const ov::Shape pads_begin{1, 2}, pads_end{2, 1}, kernel{3, 3};
 
     const auto avg_pool_v1 = std::make_shared<v1::AvgPool>(input,
                                                            strides,
@@ -72,7 +72,7 @@ std::shared_ptr<ov::Model> create_exclude_pad_workaround_model() {
 
     const auto input = std::make_shared<v0::Parameter>(ov::element::f32, ov::Shape{1, 3, 64, 64});
     const ov::Strides strides{1, 1}, dilations{1, 1};
-    const ov::Shape pads_begin{1, 1}, pads_end{1, 1}, kernel{2, 2};
+    const ov::Shape pads_begin{1, 2}, pads_end{2, 1}, kernel{3, 3};
 
     const auto zero = Constant::create(ov::element::f32, ov::Shape{}, {0});
     const auto zero_node = std::make_shared<ConvertLike>(zero, input);
@@ -84,10 +84,8 @@ std::shared_ptr<ov::Model> create_exclude_pad_workaround_model() {
     const auto pads_len = Constant::create(ov::element::i64, ov::Shape{}, {pads_begin.size()});
     const auto pads_diff = std::make_shared<Subtract>(rank, pads_len);
     const auto pads_remaining = std::make_shared<Broadcast>(zero_i64, pads_diff);
-    const auto pads_begin_v1 =
-        std::make_shared<Concat>(ov::OutputVector{std::move(pads_remaining), std::move(pads_begin_node)}, 0);
-    const auto pads_end_v1 =
-        std::make_shared<Concat>(ov::OutputVector{std::move(pads_remaining), std::move(pads_begin_node)}, 0);
+    const auto pads_begin_v1 = std::make_shared<Concat>(ov::OutputVector{pads_remaining, pads_begin_node}, 0);
+    const auto pads_end_v1 = std::make_shared<Concat>(ov::OutputVector{pads_remaining, pads_end_node}, 0);
     const auto pad_node =
         std::make_shared<Pad>(input, pads_begin_v1, pads_end_v1, zero_node, ov::op::PadMode::CONSTANT);
     const auto pads_begin_zeros = ov::Shape{0, 0};
