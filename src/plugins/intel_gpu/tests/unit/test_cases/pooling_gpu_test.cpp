@@ -3340,6 +3340,52 @@ TEST(pooling_forward_gpu_onednn, basic_max_pooling_int8) {
     }
 }
 
+TEST(pooling_forward_gpu_onednn, max_pool_opset8_indices_output_f16) {
+    auto& engine = get_test_engine();
+    if (!engine.get_device_info().supports_immad || !engine.get_device_info().supports_fp16)
+        return;
+
+    const layout in_layout{ov::PartialShape{1, 1, 4, 4}, data_types::f16, format::bfyx};
+    const layout idx_layout{ov::PartialShape{1, 1, 3, 3}, data_types::i32, format::bfyx};
+
+    auto in_mem = engine.allocate_memory(in_layout);
+    std::vector<ov::float16> in_data(16);
+    for (size_t i = 0; i < in_data.size(); i++) {
+        in_data[i] = ov::float16(static_cast<float>(i + 1));
+    }
+    set_values(in_mem, in_data);
+
+    auto idx_mem = engine.allocate_memory(idx_layout);
+    set_values(idx_mem, std::vector<int32_t>(idx_mem->count(), -1));
+
+    topology topology(
+        input_layout("input", in_layout),
+        mutable_data("indices_w", idx_mem),
+        pooling("pool", input_info("input"), input_info("indices_w"), {2, 2}, {1, 1}, {1, 1}, {0, 0}, {0, 0},
+                ov::op::PadType::EXPLICIT, ov::op::RoundingType::FLOOR, 0, data_types::i32,
+                tensor{1, 1, 3, 3}, data_types::f16),
+        mutable_data("indices_r", {input_info("pool")}, idx_mem)
+    );
+
+    ExecutionConfig config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::optimize_data(true));
+    config.set_property(ov::intel_gpu::custom_outputs(std::vector<std::string>{"pool", "indices_r"}));
+
+    network net(engine, topology, config);
+    net.set_input_data("input", in_mem);
+    auto outputs = net.execute();
+
+    const std::vector<float> expected_values = {6.f, 7.f, 8.f, 10.f, 11.f, 12.f, 14.f, 15.f, 16.f};
+    const std::vector<int32_t> expected_indices = {5, 6, 7, 9, 10, 11, 13, 14, 15};
+
+    cldnn::mem_lock<ov::float16, mem_lock_type::read> value_ptr(outputs.at("pool").get_memory(), get_test_stream());
+    cldnn::mem_lock<int32_t, mem_lock_type::read> index_ptr(outputs.at("indices_r").get_memory(), get_test_stream());
+    for (size_t i = 0; i < expected_values.size(); i++) {
+        ASSERT_EQ(expected_values[i], static_cast<float>(value_ptr[i])) << " at " << i;
+        ASSERT_EQ(expected_indices[i], index_ptr[i]) << " at " << i;
+    }
+}
+
 TEST(pooling_onednn, blocked_rank_3_layout_no_throw_in_calc_dims) {
     auto& engine = get_test_engine();
     if (!engine.get_device_info().supports_immad)
