@@ -5249,3 +5249,38 @@ TEST(reorder_gpu_i4, bf16_to_u4) {
     std::vector<ov::bfloat16> input_data = {ov::bfloat16(-8.5f), ov::bfloat16(7.2f), ov::bfloat16(0.0f), ov::bfloat16(6.0f)};
     run_reorder_test_i4(data_types::bf16, data_types::u4, input_data, {0x70, 0x60});
 }
+
+// e8m0 holds an exponent only, so a cast rounds the mantissa away. It has no sign and
+// one code for NaN, so a negative value becomes the smallest scale and an infinity the
+// largest finite one. The expected codes are the ones the host converter returns.
+TEST(reorder_gpu_f8, f32_to_e8m0) {
+    auto& engine = get_test_engine();
+
+    layout in_layout({ov::Shape{1, 1, 2, 4}, data_types::f32, format::bfyx});
+    layout out_layout({ov::Shape{1, 1, 2, 4}, data_types::f8e8m0, format::bfyx});
+
+    memory::ptr input_mem = engine.allocate_memory(in_layout);
+    set_values(input_mem, std::vector<float>{ 1.0f, 1.7f, 3.0f, 100.0f, -1.0f, 0.0f,
+                                              std::numeric_limits<float>::infinity(),
+                                              std::numeric_limits<float>::quiet_NaN() });
+
+    topology topology(input_layout("input", in_layout), reorder("reorder", input_info("input"), out_layout));
+
+    auto config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+    config.set_property(ov::intel_gpu::optimize_data(true));
+
+    network network(engine, topology, config);
+    network.set_input_data("input", input_mem);
+
+    auto outputs = network.execute();
+    auto output_mem = outputs.at("reorder").get_memory();
+    cldnn::mem_lock<uint8_t, mem_lock_type::read> output_ptr(output_mem, get_test_stream());
+
+    // 2^0, 2^1, 2^1 tie to even, 2^7, smallest scale, smallest scale, largest finite, NaN
+    const std::vector<uint8_t> expected = { 0x7F, 0x80, 0x80, 0x86, 0x00, 0x00, 0xFE, 0xFF };
+    ASSERT_EQ(expected.size(), output_ptr.size());
+    for (size_t i = 0; i < expected.size(); i++) {
+        ASSERT_EQ(expected[i], output_ptr[i]) << "at " << i;
+    }
+}
