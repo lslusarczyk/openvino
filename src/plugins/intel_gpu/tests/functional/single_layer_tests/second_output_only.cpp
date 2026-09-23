@@ -6,6 +6,7 @@
 #include "shared_test_classes/base/ov_subgraph.hpp"
 
 #include "openvino/op/constant.hpp"
+#include "openvino/op/ctc_greedy_decoder_seq_len.hpp"
 #include "openvino/op/lstm_sequence.hpp"
 #include "openvino/op/max_pool.hpp"
 #include "openvino/op/parameter.hpp"
@@ -13,7 +14,7 @@
 
 namespace {
 
-enum class SecondOutputOp { MaxPool, TopK, LSTMSequence };
+enum class SecondOutputOp { MaxPool, TopK, LSTMSequence, CTCGreedyDecoderSeqLen };
 
 const char* op_name(SecondOutputOp op_kind) {
     switch (op_kind) {
@@ -21,6 +22,8 @@ const char* op_name(SecondOutputOp op_kind) {
         return "MaxPool";
     case SecondOutputOp::TopK:
         return "TopK";
+    case SecondOutputOp::CTCGreedyDecoderSeqLen:
+        return "CTCGreedyDecoderSeqLen";
     default:
         return "LSTMSequence";
     }
@@ -53,6 +56,15 @@ protected:
             auto k = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {3});
             op = std::make_shared<ov::op::v11::TopK>(data, k, 1, ov::op::TopKMode::MAX,
                                                      ov::op::TopKSortType::SORT_VALUES, ov::element::i32);
+        } else if (GetParam() == SecondOutputOp::CTCGreedyDecoderSeqLen) {
+            const size_t batch = 2, steps = 3, classes = 4;
+            auto data = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::Shape{batch, steps, classes});
+            params.push_back(data);
+            auto lengths = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{batch},
+                                                        std::vector<int32_t>(batch, steps));
+            auto blank = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {classes - 1});
+            op = std::make_shared<ov::op::v6::CTCGreedyDecoderSeqLen>(data, lengths, blank, false,
+                                                                     ov::element::i32, ov::element::i32);
         } else {
             const size_t batch = 1, seq_len = 3, input_size = 2, hidden_size = 2, num_dir = 1;
             auto x = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::Shape{batch, seq_len, input_size});
@@ -85,6 +97,7 @@ INSTANTIATE_TEST_SUITE_P(smoke_SecondOutputOnly,
                          SecondOutputOnlyTest,
                          ::testing::Values(SecondOutputOp::MaxPool,
                                            SecondOutputOp::TopK,
-                                           SecondOutputOp::LSTMSequence),
+                                           SecondOutputOp::LSTMSequence,
+                                           SecondOutputOp::CTCGreedyDecoderSeqLen),
                          SecondOutputOnlyTest::getTestCaseName);
 }  // namespace
