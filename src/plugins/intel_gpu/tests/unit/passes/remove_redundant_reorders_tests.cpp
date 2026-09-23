@@ -274,6 +274,35 @@ TEST(remove_redundant_reorders, remove_fused) {
     ASSERT_TRUE(has_node(*prog, "reorder2"));
 }
 
+// A cast to a float type of 8 bits rounds the values, the same way a cast to u8 does.
+// Both reorders of the chain have to stay, or the network returns the input unchanged.
+TEST(remove_redundant_reorders, keep_cast_to_f8) {
+    auto& engine = get_test_engine();
+
+    auto input = engine.allocate_memory({ data_types::f32, format::bfyx, { 1, 1, 4, 1 } });
+    topology topology;
+    topology.add(input_layout("input", input->get_layout()));
+    topology.add(reorder("cast", input_info("input"), format::any, data_types::f8e4m3));
+    topology.add(reorder("back", input_info("cast"), format::any, data_types::f32));
+
+    ExecutionConfig config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::optimize_data(true));
+    network network(engine, topology, config);
+
+    set_values(input, { 3.0f, 1.7f, 100.0f, -1.0f });
+    network.set_input_data("input", input);
+
+    auto outputs = network.execute();
+    auto output = outputs.at("back").get_memory();
+
+    const std::vector<float> expected = { 3.0f, 1.75f, 96.0f, -1.0f };
+    cldnn::mem_lock<float> output_ptr (output, get_test_stream());
+    ASSERT_EQ(expected.size(), output_ptr.size());
+    for (size_t i = 0; i < expected.size(); i++) {
+        ASSERT_EQ(expected[i], output_ptr[i]) << "at " << i;
+    }
+}
+
 TEST(remove_redundant_reorders, fuse_reorder_to_prev_mvn_dyn) {
     auto& engine = get_test_engine();
     auto weights = engine.allocate_memory({ ov::PartialShape{ 1024, 256 }, data_types::f16, format::bfyx });
