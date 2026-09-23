@@ -251,7 +251,7 @@ static void CreateConstantOp(ProgramBuilder& p, const std::shared_ptr<ov::op::v0
         } else if (ov::is_type<ov::op::v0::PRelu>(outOp) && node.get_index() == 1) {
             // PReLU slope tensor reshape policy
             //
-            // 1. 1-dim slope is handled by 'getConstTensor' (if slope dimension is equal to the feature dimension of input).
+            // 1. 1-dim slope goes over the feature dimension of the input.
             //   ex) [1] --> [1, 1, 1, 1]
             //       [N] --> [1, N, 1, 1]
             //
@@ -260,14 +260,22 @@ static void CreateConstantOp(ProgramBuilder& p, const std::shared_ptr<ov::op::v0
             //   ex) [N, 1, 1] --> [1, N, 1, 1]
             //       [N, M, 1] --> [1, N, M, 1]
             auto input_shape = outOp->get_input_partial_shape(0);
-            if ((constDims.size() != 1 && constDims.size() < input_shape.size()) ||
-                (constDims.size() == 1 && input_shape.is_static() && input_shape.size() > 1 &&
-                 static_cast<int64_t>(constDims[0]) != input_shape[1].get_length())) {
+            // only the feature dimension decides between the two rules, the other ones may stay dynamic
+            bool has_feature = input_shape.rank().is_static() && input_shape.size() > 1;
+            bool slope_over_feature = has_feature && constDims.size() == 1 &&
+                                      (input_shape[1].is_dynamic() || static_cast<int64_t>(constDims[0]) == input_shape[1].get_length());
+            if ((constDims.size() != 1 && constDims.size() < input_shape.size()) || (constDims.size() == 1 && has_feature && !slope_over_feature)) {
                 // Reshape 'constDims' according to the numpy broadcasting rule.
                 ov::Shape slope_shape(input_shape.size(), 1);
                 for (size_t j = 1; j <= constDims.size(); j++) {
                     slope_shape[slope_shape.size() - j] = constDims[constDims.size() - j];
                 }
+                constDims = slope_shape;
+            } else if (constDims.size() == 1 && has_feature) {
+                // 'getConstTensor' puts a 1-dim slope on the feature axis, but the new shape infer
+                // path takes the shape as it is and would put the slope on the batch axis instead
+                ov::Shape slope_shape(input_shape.size(), 1);
+                slope_shape[1] = constDims[0];
                 constDims = slope_shape;
             }
         } else if (is_grouped_conv(outOp) && node.get_index() == 1 && !p.use_new_shape_infer()) {
