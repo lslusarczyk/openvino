@@ -629,7 +629,9 @@ void jitUniGatherKernel<isa>::calcSrcShiftShort(Vmm* vAuxPool, bool shiftFirst) 
     }
 
     vpcmpeqd(kDstMask, vAux0, vAux0);
-    if (jcp.batchDims > 0LU) {
+    // one element before the axis means one batch, so the batch sum is zero and
+    // vmmSrcBeforeAxisSumB holds nothing, generate() fills it only for bigger sizes
+    if (jcp.batchDims > 0LU && jcp.beforeAxisSize != 1LU) {
         // Calculate indices batch sum.
         uni_vcvtdq2ps(vAux0, vmmSrcBeforeAxisSumB);
         uni_vcvtdq2ps(vDstShifts, vmmSrcAfterBatchSizeB);
@@ -743,7 +745,8 @@ void jitUniGatherKernel<isa>::calcSrcShiftShortBlock(Vmm* vAuxPool, bool shiftFi
     }
 
     vpcmpeqd(kDstMask, vAux0, vAux0);
-    if (jcp.batchDims > 0LU) {
+    // vAux1 holds the sum before the axis, written above only for a size bigger than one
+    if (jcp.batchDims > 0LU && jcp.beforeAxisSize != 1LU) {
         // Calculate indices batch sum.
         uni_vcvtdq2ps(vAux0, vAux1);
         uni_vcvtdq2ps(vDstShifts, vmmSrcAfterBatchSizeB);
