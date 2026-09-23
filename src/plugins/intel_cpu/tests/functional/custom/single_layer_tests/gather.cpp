@@ -521,6 +521,25 @@ std::vector<std::tuple<int, int>> get4DAxisBatchJitStat(ov::element::Type type, 
     return {};
 }
 
+// Every shape above holds more than one element before the axis. The jit kernel takes
+// another path when there is only one, so the batch of one needs its own cases: the
+// first shape ends in the blocked case, the second one in the elementwise case.
+const std::vector<std::vector<ov::test::InputShape>> staticShapes4DJitOneBeforeAxis = {
+    {{{}, {{1, 5, 2, 2}}},
+     {{}, {{1, 3}}}},
+    {{{}, {{1, 5, 1, 1}}},
+     {{}, {{1, 3}}}}};
+
+INSTANTIATE_TEST_SUITE_P(smoke_static_4D_jit32_one_before_axis,
+                         GatherLayerTestCPU,
+                         ::testing::Combine(::testing::ValuesIn(staticShapes4DJitOneBeforeAxis),
+                                            ::testing::Values(std::tuple<int, int>{1, 1}),
+                                            ::testing::Values(ElementType::f32),
+                                            ::testing::Values(true),
+                                            ::testing::ValuesIn(getCPUInfo()),
+                                            ::testing::Values(additionalConfig[0])),
+                         GatherLayerTestCPU::getTestCaseName);
+
 INSTANTIATE_TEST_SUITE_P(smoke_static_4D_jit32,
                          GatherLayerTestCPU,
                          ::testing::Combine(::testing::ValuesIn(get4DShapesJitStat(2)),
