@@ -140,7 +140,20 @@ half _intel_convert_hf8_to_f16(char val) {
 
 uchar _intel_convert_f32_fo_e8m0(float val) {
     uint val_uint = as_uint(val);
-    return (uchar)((val_uint >> 23) & 0xFF);
+    uint exp = (val_uint >> 23) & 0xFF;
+    uint mant = val_uint & 0x007FFFFF;
+
+    // e8m0 holds no sign and has one code for NaN only, so a negative value becomes
+    // the smallest scale and an infinity the largest finite one
+    if (val_uint >> 31) {
+        return 0;
+    } else if (exp >= 0xFE) {
+        return (uchar)(exp - (exp == 0xFF && mant == 0));
+    } else if (exp == 0) {
+        return mant > 0x00600000 ? 1 : 0;
+    }
+    // round to nearest, tie to even
+    return (uchar)(exp + ((mant > 0x00400000) || (mant == 0x00400000 && (exp & 1))));
 }
 
 uchar _intel_convert_f32_fo_e8m0_sat(float val) {
