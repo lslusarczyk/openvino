@@ -301,6 +301,10 @@ void remove_redundant_reorders::run(program& p) {
         // Do not opt out result reorder of Loop body network
         no_output_optimization |= (r_node.get_program().is_body_program() && r_node.is_output());
 
+        // The output memory of a network is read from the first port of the primitive, so a
+        // reorder that takes another port has to stay to keep that port reachable.
+        no_output_optimization |= (r_node.is_output() && r_node.get_dependency_with_port(0).second != 0);
+
         // Prevent optimizing out reorder when a sum post-op is used, as it relies on replacing the
         // original primitive's output buffer with a dependency input. If the output reorder is removed,
         // it may result in reading from an incorrect memory buffer during infer request output processing.
