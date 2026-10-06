@@ -866,7 +866,15 @@ JitConstants make_activation_jit_constants(const std::string& suffix,
     case activation_func::clamp: {
         const JitTerm m = convert_to_type("m"_jit, calc_dt);
         const JitTerm n = convert_to_type("n"_jit, calc_dt);
-        jit.add(make_jit_constant(macro_def, max(m, min(n, input))));
+        // Same NaN trap as the kernel_selector jitter: OpenCL min/max drop a
+        // NaN operand, so min/max of a NaN input returns the upper bound.
+        // Keep NaN for real types. Integer clamp stays a plain min/max.
+        const JitTerm body = max(m, min(n, input));
+        if (ov::element::Type(calc_dt).is_real()) {
+            jit.add(make_jit_constant(macro_def, ternary(isnan(input), input, body)));
+        } else {
+            jit.add(make_jit_constant(macro_def, body));
+        }
         break;
     }
     case activation_func::softrelu:

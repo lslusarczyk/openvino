@@ -2110,6 +2110,52 @@ TEST(activation_i8_fw_gpu, clamp_basic_bfzyx)
     }
 }
 
+// OpenCL fmax(lower, fmin(upper, x)) turns a NaN into the upper bound.
+// The reference keeps NaN because both comparisons with the bounds are false.
+TEST(activation_f32_fw_gpu, clamp_nan_bfyx)
+{
+    auto& engine = get_test_engine();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float neg_nan = -nan;
+    // Length is a multiple of 4 so activation_opt is eligible (it rejects other sizes).
+    // activation_ref is only a fallback, and it is the one a shorter tensor would pick.
+    std::vector<float> input_vec = {nan, neg_nan, INFINITY, -INFINITY, -100.f, 100.f, -10.f, 10.f, 0.f, 3.f, 2.f, -2.f};
+    auto input = engine.allocate_memory({ data_types::f32, format::bfyx, { 1, 1, 1, static_cast<int>(input_vec.size()) } });
+    set_values(input, input_vec);
+
+    topology topology;
+    activation_additional_params params = {-10.f, 10.f};
+    topology.add(input_layout("input", input->get_layout()));
+    topology.add(activation("activation", input_info("input"), activation_func::clamp, params));
+
+    network network(engine, topology, get_test_default_config(engine));
+    ASSERT_NE(network.get_implementation_info("activation").find("activation_opt"), std::string::npos)
+        << network.get_implementation_info("activation");
+    network.set_input_data("input", input);
+    auto outputs = network.execute();
+
+    auto output_memory = outputs.at("activation").get_memory();
+    cldnn::mem_lock<float, mem_lock_type::read> output_ptr(output_memory, get_test_stream());
+
+    auto expect = [](float x, float lo, float hi) {
+        if (std::isnan(x))
+            return x;
+        if (x < lo)
+            return lo;
+        if (x > hi)
+            return hi;
+        return x;
+    };
+    for (size_t i = 0; i < input_vec.size(); ++i) {
+        const float want = expect(input_vec[i], params.a, params.b);
+        if (std::isnan(want)) {
+            ASSERT_TRUE(std::isnan(output_ptr[i])) << "at index " << i;
+        } else {
+            ASSERT_FLOAT_EQ(want, output_ptr[i]) << "at index " << i;
+        }
+    }
+}
+
 TEST(activation_i32_fw_gpu, basic_yxfb_i32_funcs) {
     auto& engine = get_test_engine();
     auto input = engine.allocate_memory({ data_types::i32, format::yxfb,{ 2, 2, 2, 2 } });
