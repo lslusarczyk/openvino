@@ -3253,10 +3253,14 @@ bool primitive_inst::is_valid_fusion() const {
     if (fuse_descriptors.empty()) {
         return true;
     }
-    std::vector<fused_primitive_desc> fused_eltwise_prims;
+    // Pointers, not copies: this runs for every dynamic primitive on every inference, and a
+    // fused_primitive_desc carries two layouts, two vectors and a map keyed by primitive_id, so
+    // copying the list is a handful of allocations per descriptor. The loop below only reads
+    // scalar fields and the descriptor itself, all of which a pointer reaches just as well.
+    std::vector<const fused_primitive_desc*> fused_eltwise_prims;
     for (const auto& fd : fuse_descriptors) {
         if (fd.is_type<eltwise>() || fd.is_type<activation>()) {
-            fused_eltwise_prims.push_back(fd);
+            fused_eltwise_prims.push_back(&fd);
         } else {
             if (fd.is_type<reorder>() || fd.is_type<quantize>()) {
                 continue;
@@ -3302,7 +3306,8 @@ bool primitive_inst::is_valid_fusion() const {
     const auto& out_pshape = (_unfused_subgraph != nullptr && !get_flag(ExecutionFlags::SHAPE_CHANGED))
                                  ? _unfused_subgraph->get_primitive(get_node().id())->get_output_layout().get_partial_shape()
                                  : _impl_params->get_output_layout().get_partial_shape();
-    for (auto& fd : fused_eltwise_prims) {
+    for (const auto* fd_ptr : fused_eltwise_prims) {
+        const auto& fd = *fd_ptr;
         auto outer_dep_idx = fd.outer_dep_start_idx;
         if (outer_dep_idx < 0) {  // no outer dep
             continue;
