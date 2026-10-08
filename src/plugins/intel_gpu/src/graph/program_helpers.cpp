@@ -5,6 +5,7 @@
 #include "program_helpers.h"
 #include "intel_gpu/graph/program.hpp"
 #include "data_inst.h"
+#include "mutable_data_inst.h"
 #include "pooling_inst.h"
 #include <algorithm>
 #include <utility>
@@ -172,6 +173,11 @@ add_fusing_type onednn_add_fusing_helpers::get_add_fusing_type(
             && p_layout.data_padding == d_layout.data_padding
             && (dep_node.get_users().size() == 1 || is_direct_ancestor(p_node, dep_node))
             && !dep_node.is_constant()
+            // A sum post-op accumulates into the addend's buffer. mutable_data owns memory the
+            // caller handed in and keeps reading between inferences, and unlike data it is not
+            // marked constant, because mark_if_constant() returns early for a node with no
+            // dependencies. So the constant check above does not cover it.
+            && !dep_node.is_type<mutable_data>()
             && !p_node.is_type<pooling>()
             && !p_node.is_output()
             && (!dep_node.is_type<input_layout>() || dep_node.get_users().size() <= 1)) {

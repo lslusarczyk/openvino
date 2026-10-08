@@ -13,6 +13,7 @@
 #include "activation_inst.h"
 #include "reorder_inst.h"
 #include "convolution_inst.h"
+#include "mutable_data_inst.h"
 #include "pass_manager.h"
 #include "to_string_utils.h"
 
@@ -242,4 +243,61 @@ TEST(add_onednn_optimization_attributes, ancestor_walk_depth_boundary) {
 
     ASSERT_EQ(residual_chain_fusing_type(engine, 7), add_fusing_type::sum);
     ASSERT_EQ(residual_chain_fusing_type(engine, 8), add_fusing_type::binary_per_tensor);
+}
+
+// A state tensor handed in as mutable_data is read again after the inference, so it must not be
+// used as the accumulator of a sum post-op. The addend is allocated directly in the blocked
+// format the convolution runs in, which is what makes the layouts match and gets the sum past
+// the format check.
+TEST(add_onednn_optimization_attributes, sum_post_op_does_not_overwrite_mutable_data) {
+    auto& engine = get_test_engine();
+
+    if (!engine.get_device_info().supports_immad)
+        return;
+
+    auto in_layout = layout{ov::PartialShape({1, 16, 32, 32}), data_types::f16, format::bfyx};
+    auto state_layout = layout{ov::PartialShape({1, 16, 32, 32}), data_types::f16, format::b_fs_yx_fsv16};
+
+    auto weight_mem = engine.allocate_memory(layout{ov::PartialShape({16, 16, 1, 1}), data_types::f16, format::bfyx});
+    auto input_mem = engine.allocate_memory(in_layout);
+    auto state_mem = engine.allocate_memory(state_layout);
+
+    std::vector<ov::float16> state_values;
+    {
+        cldnn::mem_lock<ov::float16, mem_lock_type::write> lock(weight_mem, engine.get_service_stream());
+        for (size_t i = 0; i < lock.size(); i++)
+            lock[i] = ov::float16(0.25f);
+    }
+    {
+        cldnn::mem_lock<ov::float16, mem_lock_type::write> lock(input_mem, engine.get_service_stream());
+        for (size_t i = 0; i < lock.size(); i++)
+            lock[i] = ov::float16(1.0f);
+    }
+    {
+        cldnn::mem_lock<ov::float16, mem_lock_type::write> lock(state_mem, engine.get_service_stream());
+        for (size_t i = 0; i < lock.size(); i++)
+            lock[i] = ov::float16(static_cast<float>(i % 7) - 3.0f);
+        state_values.assign(lock.begin(), lock.end());
+    }
+
+    topology topology;
+    topology.add(input_layout("input", in_layout));
+    topology.add(data("weight", weight_mem));
+    topology.add(mutable_data("state", state_mem));
+    topology.add(convolution("conv", input_info("input"), "weight", "", 1, {1, 1}, {1, 1}, {0, 0}, {0, 0}, false));
+    topology.add(eltwise("eltwise", input_info("conv"), input_info("state"), eltwise_mode::sum));
+    topology.add(reorder("reorder", input_info("eltwise"), format::bfyx, data_types::f16));
+
+    ExecutionConfig config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::optimize_data(true));
+    config.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+
+    network net(engine, topology, config);
+    net.set_input_data("input", input_mem);
+    net.execute();
+
+    cldnn::mem_lock<ov::float16, mem_lock_type::read> lock(state_mem, net.get_stream());
+    ASSERT_EQ(lock.size(), state_values.size());
+    for (size_t i = 0; i < lock.size(); i++)
+        ASSERT_EQ(static_cast<float>(lock[i]), static_cast<float>(state_values[i])) << "state changed at " << i;
 }
