@@ -243,3 +243,46 @@ TEST(add_onednn_optimization_attributes, ancestor_walk_depth_boundary) {
     ASSERT_EQ(residual_chain_fusing_type(engine, 7), add_fusing_type::sum);
     ASSERT_EQ(residual_chain_fusing_type(engine, 8), add_fusing_type::binary_per_tensor);
 }
+
+// The same residual pattern as sum_post_op_for_residual_connection, except conv1 is also a
+// network output. A sum post-op on conv3 would accumulate into conv1's buffer, so the caller
+// would read the residual sum where it asked for conv1.
+TEST(add_onednn_optimization_attributes, sum_post_op_refused_when_addend_is_output) {
+    auto& engine = get_test_engine();
+
+    if (!engine.get_device_info().supports_immad)
+        return;
+
+    auto in_layout = layout{ov::PartialShape({1, 16, 32, 32}), data_types::f16, format::bfyx};
+    auto weight = engine.allocate_memory(layout{ov::PartialShape({16, 16, 1, 1}), data_types::f16, format::bfyx});
+
+    topology topology;
+    topology.add(input_layout("input", in_layout));
+    topology.add(data("weight", weight));
+    topology.add(convolution("conv1", input_info("input"), "weight", "", 1, {1, 1}, {1, 1}, {0, 0}, {0, 0}, false));
+    topology.add(convolution("conv2", input_info("conv1"), "weight", "", 1, {1, 1}, {1, 1}, {0, 0}, {0, 0}, false));
+    topology.add(convolution("conv3", input_info("conv2"), "weight", "", 1, {1, 1}, {1, 1}, {0, 0}, {0, 0}, false));
+    topology.add(eltwise("eltwise", input_info("conv1"), input_info("conv3"), eltwise_mode::sum));
+    topology.add(reorder("reorder", input_info("eltwise"), format::bfyx, data_types::f32));
+
+    ExecutionConfig config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::optimize_data(true));
+    config.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+    // Asking for conv1 as a second output is the whole point; a reorder reading conv1 would
+    // instead give it a third user, which defeats the sum on its own and proves nothing.
+    config.set_property(ov::intel_gpu::custom_outputs(std::vector<std::string>{"reorder", "conv1"}));
+    auto prog = program::build_program(engine, topology, config, false, false);
+
+    prog->get_layout_optimizer().add_all_onednn_impls_optimization_attribute();
+    program_wrapper::apply_opt_pass<prepare_primitive_fusing>(*prog);
+    program_wrapper::apply_opt_pass<add_onednn_optimization_attributes>(*prog);
+
+    auto& conv1 = prog->get_node("conv1");
+    ASSERT_TRUE(conv1.is_output());
+
+    auto& conv3 = prog->get_node("conv3");
+    auto& cldnn_post_ops = conv3.get_fused_primitives();
+    ASSERT_EQ(cldnn_post_ops.size(), 1u);
+    ASSERT_EQ(onednn_add_fusing_helpers::get_add_fusing_type(conv3, cldnn_post_ops[0]),
+              add_fusing_type::binary_per_tensor);
+}

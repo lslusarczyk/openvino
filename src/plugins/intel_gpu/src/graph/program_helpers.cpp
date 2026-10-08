@@ -174,6 +174,10 @@ add_fusing_type onednn_add_fusing_helpers::get_add_fusing_type(
             && !dep_node.is_constant()
             && !p_node.is_type<pooling>()
             && !p_node.is_output()
+            // A sum post-op accumulates into the addend's buffer, so the addend stops holding
+            // what it computed. That is fine for an intermediate value, which nobody reads
+            // again, and wrong for a network output, which the caller reads after inference.
+            && !dep_node.is_output()
             && (!dep_node.is_type<input_layout>() || dep_node.get_users().size() <= 1)) {
             return add_fusing_type::sum;
         }
