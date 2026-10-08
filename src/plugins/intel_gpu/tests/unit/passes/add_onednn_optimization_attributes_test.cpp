@@ -101,7 +101,10 @@ TEST(add_onednn_optimization_attributes, sum_post_op_for_residual_connection) {
 }
 
 
-TEST(add_onednn_optimization_attributes, fc_sum_u8_single_user_input_uses_sum) {
+// A network input used as the addend is still a network input, however few users it has: the
+// buffer belongs to the caller, who may reuse it for the next inference, so a sum post-op must
+// not accumulate into it. This case used to be admitted on the strength of the single user.
+TEST(add_onednn_optimization_attributes, fc_sum_u8_single_user_input_uses_binary) {
     auto& engine = get_test_engine();
 
     if (!engine.get_device_info().supports_immad)
@@ -138,7 +141,7 @@ TEST(add_onednn_optimization_attributes, fc_sum_u8_single_user_input_uses_sum) {
     ASSERT_EQ(fused.size(), 1);
 
     auto fusing_type = onednn_add_fusing_helpers::get_add_fusing_type(fc_node, fused[0]);
-    ASSERT_EQ(fusing_type, add_fusing_type::sum);
+    ASSERT_EQ(fusing_type, add_fusing_type::binary_per_tensor);
 }
 
 TEST(add_onednn_optimization_attributes, fc_sum_u8_residual_input_uses_binary) {
@@ -242,4 +245,68 @@ TEST(add_onednn_optimization_attributes, ancestor_walk_depth_boundary) {
 
     ASSERT_EQ(residual_chain_fusing_type(engine, 7), add_fusing_type::sum);
     ASSERT_EQ(residual_chain_fusing_type(engine, 8), add_fusing_type::binary_per_tensor);
+}
+
+// Consuming the caller's input buffer shows up as the network disagreeing with itself: the
+// second inference reads an addend the first one already accumulated into, so the same inputs
+// stop producing the same output.
+TEST(add_onednn_optimization_attributes, sum_post_op_on_input_addend_is_repeatable) {
+    auto& engine = get_test_engine();
+
+    if (!engine.get_device_info().supports_immad)
+        return;
+
+    auto in_layout = layout{ov::PartialShape({32, 16}), data_types::f16, format::bfyx};
+    auto extra_layout = layout{ov::PartialShape({32, 8}), data_types::f16, format::bfyx};
+
+    auto weights_mem = engine.allocate_memory(layout{ov::PartialShape({8, 16}), data_types::f16, format::bfyx});
+    auto input_mem = engine.allocate_memory(in_layout);
+    auto extra_mem = engine.allocate_memory(extra_layout);
+
+    {
+        cldnn::mem_lock<ov::float16, mem_lock_type::write> lock(weights_mem, engine.get_service_stream());
+        for (size_t i = 0; i < lock.size(); i++)
+            lock[i] = ov::float16(static_cast<float>(i % 5) * 0.125f);
+    }
+    {
+        cldnn::mem_lock<ov::float16, mem_lock_type::write> lock(input_mem, engine.get_service_stream());
+        for (size_t i = 0; i < lock.size(); i++)
+            lock[i] = ov::float16(static_cast<float>(i % 3) * 0.5f);
+    }
+    {
+        cldnn::mem_lock<ov::float16, mem_lock_type::write> lock(extra_mem, engine.get_service_stream());
+        for (size_t i = 0; i < lock.size(); i++)
+            lock[i] = ov::float16(static_cast<float>(i % 11) - 5.0f);
+    }
+
+    topology topology;
+    topology.add(data("weights", weights_mem));
+    topology.add(input_layout("input", in_layout));
+    topology.add(input_layout("extra_input", extra_layout));
+    topology.add(fully_connected("fc", input_info("input"), { "weights" }, "", data_types::f16));
+    topology.add(eltwise("sum", { input_info("fc"), input_info("extra_input") }, eltwise_mode::sum));
+    topology.add(reorder("out", input_info("sum"), format::bfyx, data_types::f16));
+
+    ExecutionConfig config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::optimize_data(true));
+    config.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+
+    network net(engine, topology, config);
+    net.set_input_data("input", input_mem);
+    net.set_input_data("extra_input", extra_mem);
+
+    auto read_output = [&]() {
+        auto outputs = net.execute();
+        auto mem = outputs.at("out").get_memory();
+        cldnn::mem_lock<ov::float16, mem_lock_type::read> lock(mem, net.get_stream());
+        return std::vector<ov::float16>(lock.begin(), lock.end());
+    };
+
+    auto first = read_output();
+    auto second = read_output();
+
+    ASSERT_EQ(first.size(), second.size());
+    for (size_t i = 0; i < first.size(); i++)
+        ASSERT_EQ(static_cast<float>(first[i]), static_cast<float>(second[i]))
+            << "the two inferences disagree at " << i;
 }

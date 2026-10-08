@@ -174,7 +174,11 @@ add_fusing_type onednn_add_fusing_helpers::get_add_fusing_type(
             && !dep_node.is_constant()
             && !p_node.is_type<pooling>()
             && !p_node.is_output()
-            && (!dep_node.is_type<input_layout>() || dep_node.get_users().size() <= 1)) {
+            // A sum post-op accumulates into the addend's buffer. The buffer behind an
+            // input_layout belongs to the caller, who set it before the inference and may reuse
+            // it for the next one, so it is not ours to consume -- the user count makes no
+            // difference to that.
+            && !dep_node.is_type<input_layout>()) {
             return add_fusing_type::sum;
         }
         if (p_layout.get_tensor() == d_layout.get_tensor()) {
