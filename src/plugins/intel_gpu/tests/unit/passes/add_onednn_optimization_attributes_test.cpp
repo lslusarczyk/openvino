@@ -243,3 +243,73 @@ TEST(add_onednn_optimization_attributes, ancestor_walk_depth_boundary) {
     ASSERT_EQ(residual_chain_fusing_type(engine, 7), add_fusing_type::sum);
     ASSERT_EQ(residual_chain_fusing_type(engine, 8), add_fusing_type::binary_per_tensor);
 }
+
+// onednn reads the addend of a sum post-op as the destination type, because append_sum() is
+// given a data type only for convolution. f16 and bf16 are both two bytes, so a comparison of
+// sizes lets the pair through and the addend is reinterpreted. 3.0 is 0x4200 as f16 and 0x4040
+// as bf16, which is why the value matters: 2.0 is 0x4000 in both and hides the defect.
+TEST(add_onednn_optimization_attributes, sum_post_op_refused_for_mismatched_addend_type) {
+    auto& engine = get_test_engine();
+
+    if (!engine.get_device_info().supports_immad)
+        return;
+
+    auto in_layout = layout{ov::PartialShape({32, 16}), data_types::f16, format::bfyx};
+    auto extra_layout = layout{ov::PartialShape({32, 8}), data_types::bf16, format::bfyx};
+
+    auto input_mem = engine.allocate_memory(in_layout);
+    auto extra_mem = engine.allocate_memory(extra_layout);
+    {
+        cldnn::mem_lock<ov::float16, mem_lock_type::write> lock(input_mem, engine.get_service_stream());
+        for (size_t i = 0; i < lock.size(); i++)
+            lock[i] = ov::float16(1.0f);
+    }
+    {
+        cldnn::mem_lock<ov::bfloat16, mem_lock_type::write> lock(extra_mem, engine.get_service_stream());
+        for (size_t i = 0; i < lock.size(); i++)
+            lock[i] = ov::bfloat16(3.0f);
+    }
+
+    // Each run gets its own weights memory and its own topology on purpose:
+    // program::transfer_memory_to_device() resets the memory pointer on the data primitive, so
+    // a second program built from the same topology reads a null memory and crashes.
+    auto run = [&](bool optimize) {
+        auto weights_mem = engine.allocate_memory(layout{ov::PartialShape({8, 16}), data_types::f16, format::bfyx});
+        {
+            cldnn::mem_lock<ov::float16, mem_lock_type::write> lock(weights_mem, engine.get_service_stream());
+            for (size_t i = 0; i < lock.size(); i++)
+                lock[i] = ov::float16(0.125f);
+        }
+
+        topology topology;
+        topology.add(data("weights", weights_mem));
+        topology.add(input_layout("input", in_layout));
+        topology.add(input_layout("extra_input", extra_layout));
+        topology.add(fully_connected("fc", input_info("input"), { "weights" }, "", data_types::f16));
+        topology.add(eltwise("sum", { input_info("fc"), input_info("extra_input") }, eltwise_mode::sum));
+        topology.add(reorder("out", input_info("sum"), format::bfyx, data_types::f16));
+
+        ExecutionConfig config = get_test_default_config(engine);
+        config.set_property(ov::intel_gpu::optimize_data(optimize));
+        config.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+
+        network net(engine, topology, config);
+        net.set_input_data("input", input_mem);
+        net.set_input_data("extra_input", extra_mem);
+        auto outputs = net.execute();
+        cldnn::mem_lock<ov::float16, mem_lock_type::read> lock(outputs.at("out").get_memory(), net.get_stream());
+        std::vector<float> result;
+        for (size_t i = 0; i < lock.size(); i++)
+            result.push_back(static_cast<float>(lock[i]));
+        return result;
+    };
+
+    auto plain = run(false);
+    auto fused = run(true);
+
+    ASSERT_EQ(plain.size(), fused.size());
+    for (size_t i = 0; i < plain.size(); i++) {
+        ASSERT_NEAR(plain[i], 16 * 0.125f + 3.0f, 1e-2f) << "unfused reference is off at " << i;
+        ASSERT_NEAR(fused[i], plain[i], 1e-2f) << "fusing changed the result at " << i;
+    }
+}

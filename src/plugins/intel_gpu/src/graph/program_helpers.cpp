@@ -5,6 +5,7 @@
 #include "program_helpers.h"
 #include "intel_gpu/graph/program.hpp"
 #include "data_inst.h"
+#include "convolution_inst.h"
 #include "pooling_inst.h"
 #include <algorithm>
 #include <utility>
@@ -168,6 +169,12 @@ add_fusing_type onednn_add_fusing_helpers::get_add_fusing_type(
 
     if (is_full_tensor(p_layout) && is_full_tensor(d_layout)) {
         if (data_type_traits::size_of(p_layout.data_type) == data_type_traits::size_of(d_layout.data_type)
+            // Convolution is the only primitive that passes the addend's data type to
+            // append_sum (see init_onednn_primitive_attributes); every other one gets the bare
+            // append_sum(scale) and onednn then reads the addend as the destination type.
+            // Equal sizes do not make that safe: f16 and bf16 are both two bytes, and 3.0
+            // is 0x4200 as f16 and 0x4040 as bf16.
+            && (p_node.is_type<convolution>() || p_layout.data_type == d_layout.data_type)
             && p_layout.format == d_layout.format && p_layout.get_tensor() == d_layout.get_tensor()
             && p_layout.data_padding == d_layout.data_padding
             && (dep_node.get_users().size() == 1 || is_direct_ancestor(p_node, dep_node))
