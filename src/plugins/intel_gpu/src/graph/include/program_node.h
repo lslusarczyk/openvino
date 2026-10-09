@@ -253,9 +253,6 @@ public:
 
     std::vector<primitive_id> get_dependencies_ids() const;
 
-    void remove_dependency(size_t idx);
-    void remove_dependency(program_node& node);
-
     int32_t get_dependency_output_port(const program_node& node) const;
     size_t get_dependency_index(const program_node& node) const;
     size_t get_user_index(const program_node& node) const;

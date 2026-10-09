@@ -202,16 +202,6 @@ std::vector<primitive_id> program_node::get_dependencies_ids() const {
     return dep_ids;
 }
 
-void program_node::remove_dependency(size_t idx) {
-    if (idx >= dependencies.size()) {
-        return;
-    }
-
-    dependencies[idx].first->users.remove(this);
-    myprog.remove_if_dangling(*dependencies[idx].first);
-    dependencies.erase(dependencies.begin() + idx);
-}
-
 const std::vector<uint32_t>& program_node::get_memory_dependencies() const {
     return memory_dependencies.values();
 }
@@ -355,14 +345,6 @@ std::unique_ptr<json_composite> program_node::desc_to_json() const {
     node_info->add("dependant_shape_of_nodes_ids", dependant_shape_of_nodes_ids);
     node_info->add("in_shape_of_subgraph", in_shape_of_subgraph);
     return node_info;
-}
-
-void program_node::remove_dependency(program_node& node) {
-    for (size_t i = 0; i < dependencies.size(); ++i) {
-        if (dependencies[i].first == &node) {
-            remove_dependency(i);
-        }
-    }
 }
 
 size_t program_node::get_user_index(const program_node& node) const {
