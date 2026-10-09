@@ -1468,7 +1468,26 @@ bool primitive_inst::use_async_compilation() {
             !_impls_factory->has(impl_types::onednn) && (get_node().get_selected_impl() != nullptr) && !get_node().get_selected_impl()->is_onednn();
     }
 
-    return (compile_conv_impls || compile_fc_impls || compile_gemm_impls ||
+    // A reorder into or out of a blocked format is served by a shape agnostic OCL kernel for the
+    // whole lifetime of a dynamic network, while the static impl chosen for the very same layouts
+    // is an order of magnitude faster. Reorder shapes are known from the first inference, so let
+    // the static impl be compiled in the background like the other primitives above.
+    //
+    // Only format changing reorders qualify. A reorder that keeps the format and only adjusts
+    // padding or data type has a static path that prefers reorder_data_fast_b1, which is a loss
+    // on an integrated GPU: its flat dispatch runs with a local size of 32 where the shape
+    // agnostic kernel uses 512. Shape flow reorders are skipped as well, as they run on CPU over
+    // a handful of values and a background compilation would never pay for itself.
+    bool compile_reorder_impls = get_node().is_type<reorder>() && !get_node().is_in_shape_of_subgraph();
+    if (compile_reorder_impls) {
+        const auto& in_fmt = get_node().get_input_layout(0).format;
+        const auto& out_fmt = get_node().get_output_layout(0).format;
+        compile_reorder_impls = in_fmt != out_fmt &&
+                                (!format::is_simple_data_format(in_fmt) || !format::is_simple_data_format(out_fmt)) &&
+                                (get_node().get_selected_impl() != nullptr) && !get_node().get_selected_impl()->is_onednn();
+    }
+
+    return (compile_conv_impls || compile_fc_impls || compile_gemm_impls || compile_reorder_impls ||
             (get_node().is_type<softmax>() && (get_node().get_selected_impl() != nullptr) &&
              get_node().get_selected_impl()->get_kernel_name().find("softmax_gpu_ref") != std::string::npos));
 }

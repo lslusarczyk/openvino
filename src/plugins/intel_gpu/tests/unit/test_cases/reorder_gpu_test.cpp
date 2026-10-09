@@ -16,6 +16,7 @@
 #include <intel_gpu/primitives/random_uniform.hpp>
 
 #include "reorder_inst.h"
+#include "intel_gpu/runtime/compilation_context.hpp"
 
 #include <cmath>
 #include <limits>
@@ -713,6 +714,46 @@ TEST(reorder_gpu_optimization, dynamic_fsv_reorder_cross_type) {
     compare_bfyx2blocked_with_ref_dynamic("reorder_data_fsv", data_types::f16, data_types::f32, format::b_fs_yx_fsv32, format::b_fs_yx_fsv16, 2, 48, 16, 8, 0, 0);
     // Cross-type: bf16 -> f32 with format change
     compare_bfyx2blocked_with_ref_dynamic("reorder_data_fsv", data_types::bf16, data_types::f32, format::b_fs_yx_fsv32, format::b_fs_yx_fsv16, 2, 48, 16, 8, 0, 0);
+}
+
+TEST(reorder_gpu_optimization, dynamic_reorder_switches_to_static_impl) {
+    auto& engine = get_test_engine();
+
+    const tensor ts{2, 48, 16, 8};
+    layout static_layout{data_types::f16, format::bfyx, ts};
+    layout dynamic_layout{ov::PartialShape::dynamic(4), data_types::f16, format::bfyx};
+
+    auto input = engine.allocate_memory(static_layout);
+    tests::random_generator rg(GET_SUITE_NAME);
+    set_values(input, rg.generate_random_1d<ov::float16>(static_layout.count(), -10, 10));
+
+    topology topo(input_layout("input", dynamic_layout),
+                  reorder("reorder", input_info("input"), format::b_fs_yx_fsv16, data_types::f16));
+
+    auto config = get_test_default_config(engine);
+    config.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+
+    network net(engine, topo, config);
+    net.set_input_data("input", input);
+    auto first = net.execute();
+
+    auto inst = net.get_primitive("reorder");
+    ASSERT_TRUE(inst->get_impl() != nullptr);
+    ASSERT_TRUE(inst->get_impl()->is_dynamic());
+
+    // The shape is pinned by the first execution, so the static implementation is queued for
+    // background compilation and must replace the shape agnostic one on the next execution.
+    net.get_program()->get_compilation_context().wait_all();
+    auto second = net.execute();
+
+    ASSERT_TRUE(inst->get_impl() != nullptr);
+    ASSERT_FALSE(inst->get_impl()->is_dynamic());
+
+    topology topo_ref(input_layout("input", static_layout),
+                      reorder("reorder", input_info("input"), format::b_fs_yx_fsv16, data_types::f16));
+    network net_ref(engine, topo_ref, get_test_default_config(engine));
+    net_ref.set_input_data("input", input);
+    compare_result<int16_t>(net_ref.execute(), second);
 }
 
 TEST(reorder_gpu_optimization, fsv_reorder_output_padding_feature_axis) {
