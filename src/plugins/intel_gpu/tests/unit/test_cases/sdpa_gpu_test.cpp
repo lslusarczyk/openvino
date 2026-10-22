@@ -305,6 +305,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         sdpa_test_params{64, 32, 990, 128, 2, true}, // dynamic
         sdpa_test_params{64, 32, 990, 128, 2, false}, // static
+        sdpa_test_params{64, 8, 32, 32, 2, false},    // static f16, key length 32
         sdpa_test_params{64, 32, 990, 1, 2, true}, // dynamic
         sdpa_test_params{64, 32, 990, 1, 2, false}, // static
         sdpa_test_params{64, 10, 77, 77, 1, true}, // two ranks mask
@@ -328,6 +329,103 @@ TEST_P(sdpa_gpu_test, basic) {
 TEST_P(sdpa_gpu_test, basic_caching) {
     auto p = GetParam();
     execute(p, true);
+}
+
+// Static f16, no mask. Xe-LP miscompiles sdpa_opt when the sequence lengths are literals.
+// Head size 64 fails at key length 32. Head size 128 fails at key lengths 4, 32, 36, and 68.
+// Values stay in [-1, 1]. The default generator resolution shrinks them by 8 and hides the error.
+TEST(sdpa_gpu_custom, static_f16_short_key_matches_ref) {
+    auto& engine = get_test_engine();
+    tests::random_generator rg;
+    rg.set_seed(GET_SUITE_NAME);
+    const std::vector<std::array<int, 5>> cases = {
+        {2, 8, 32, 32, 64},
+        {1, 8, 16, 32, 64},
+        {1, 2, 32, 31, 64},
+        {1, 2, 32, 33, 64},
+        {1, 2, 4, 4, 128},
+        {1, 2, 32, 32, 128},
+        {1, 2, 36, 36, 128},
+        {1, 2, 68, 68, 128},
+        {1, 2, 132, 132, 128},
+    };
+    const std::vector<int64_t> order{0, 1, 2, 3};
+    const bool immad = engine.get_device_info().supports_immad;
+    for (const auto& c : cases) {
+        const int batch = c[0];
+        const int heads = c[1];
+        const int seq_q = c[2];
+        const int seq_kv = c[3];
+        const int head = c[4];
+        SCOPED_TRACE("b=" + std::to_string(batch) + " h=" + std::to_string(heads) + " q=" + std::to_string(seq_q) +
+                     " kv=" + std::to_string(seq_kv) + " d=" + std::to_string(head));
+
+        const layout q_layout({batch, heads, seq_q, head}, data_types::f16, format::bfyx);
+        const layout kv_layout({batch, heads, seq_kv, head}, data_types::f16, format::bfyx);
+        const auto q_data = rg.generate_random_1d<ov::float16>(q_layout.count(), -1.0, 1.0, 1);
+        const auto k_data = rg.generate_random_1d<ov::float16>(kv_layout.count(), -1.0, 1.0, 1);
+        const auto v_data = rg.generate_random_1d<ov::float16>(kv_layout.count(), -1.0, 1.0, 1);
+        auto q = engine.allocate_memory(q_layout);
+        auto k = engine.allocate_memory(kv_layout);
+        auto v = engine.allocate_memory(kv_layout);
+        set_values(q, q_data);
+        set_values(k, k_data);
+        set_values(v, v_data);
+
+        topology topo;
+        topo.add(input_layout("q", q_layout));
+        topo.add(input_layout("k", kv_layout));
+        topo.add(input_layout("v", kv_layout));
+        topo.add(scaled_dot_product_attention("sdpa",
+                                              {input_info("q"), input_info("k"), input_info("v")},
+                                              false, -1, order, order, order, order, {}, false));
+        ExecutionConfig cfg = get_test_default_config(engine);
+        cfg.set_property(ov::intel_gpu::allow_new_shape_infer(true));
+        const std::string impl = immad ? "sdpa_micro" : "sdpa_opt";
+        cfg.set_property(ov::intel_gpu::force_implementations(ov::intel_gpu::ImplForcingMap{{"sdpa", {format::type::bfyx, impl}}}));
+        auto net = get_network(engine, topo, cfg, get_test_stream_ptr(), false);
+        net->set_input_data("q", q);
+        net->set_input_data("k", k);
+        net->set_input_data("v", v);
+        auto output = net->execute().at("sdpa").get_memory();
+        if (!immad) {
+            ASSERT_EQ(net->get_primitive("sdpa")->get_impl()->m_manager->get_type_info(),
+                      ov::intel_gpu::ocl::SDPAOpt::get_type_info_static());
+        }
+
+        std::vector<float> q_f(q_data.size());
+        std::vector<float> k_f(k_data.size());
+        std::vector<float> v_f(v_data.size());
+        for (size_t i = 0; i < q_data.size(); ++i)
+            q_f[i] = static_cast<float>(q_data[i]);
+        for (size_t i = 0; i < k_data.size(); ++i)
+            k_f[i] = static_cast<float>(k_data[i]);
+        for (size_t i = 0; i < v_data.size(); ++i)
+            v_f[i] = static_cast<float>(v_data[i]);
+        const ov::Shape q_shape{static_cast<size_t>(batch), static_cast<size_t>(heads), static_cast<size_t>(seq_q), static_cast<size_t>(head)};
+        const ov::Shape kv_shape{static_cast<size_t>(batch), static_cast<size_t>(heads), static_cast<size_t>(seq_kv), static_cast<size_t>(head)};
+        std::vector<float> expected(q_f.size());
+        ov::reference::scaled_dot_product_attention<float, float>(q_f.data(),
+                                                                 k_f.data(),
+                                                                 v_f.data(),
+                                                                 nullptr,
+                                                                 nullptr,
+                                                                 nullptr,
+                                                                 expected.data(),
+                                                                 false,
+                                                                 q_shape,
+                                                                 kv_shape,
+                                                                 kv_shape,
+                                                                 {},
+                                                                 {},
+                                                                 q_shape);
+        mem_lock<ov::float16, mem_lock_type::read> output_data(output, get_test_stream());
+        float max_abs = 0.f;
+        for (size_t i = 0; i < output_data.size(); ++i) {
+            max_abs = std::max(max_abs, std::fabs(static_cast<float>(output_data[i]) - expected[i]));
+        }
+        ASSERT_LT(max_abs, 0.2f) << "max abs diff " << max_abs;
+    }
 }
 
 // Test that an explicit causal attention mask produces the same result as is_causal=true.

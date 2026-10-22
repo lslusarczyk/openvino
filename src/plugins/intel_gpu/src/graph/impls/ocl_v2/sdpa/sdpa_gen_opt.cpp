@@ -197,6 +197,12 @@ Arguments SDPAOptGeneratorBase::get_arguments_desc_impl(const kernel_impl_params
         args.push_back({ArgumentDescriptor::Types::SCALAR, 0});
     }
 
+    // Static multi-token passes the sequence lengths as scalars. See get_jit_constants.
+    if (stage == SDPAStage::MULTI_TOKENS && !params.is_dynamic() && !params.is_type<paged_attention>()) {
+        args.push_back({ArgumentDescriptor::Types::SCALAR, 0});
+        args.push_back({ArgumentDescriptor::Types::SCALAR, 1});
+    }
+
     return args;
 }
 
@@ -255,12 +261,24 @@ JitConstants SDPAOptGeneratorMultiToken::get_jit_constants(const kernel_impl_par
     jit.make("SDPA_STAGE_0", 1);
     jit.make("TARGET_SEQ_LEN_BLOCK_SIZE", get_target_seq_len_block_size());
 
+    // IGC miscompiles this f16 kernel on Xe-LP when SOURCE_SEQ_LEN and TARGET_SEQ_LEN are literals.
+    // Head size 64 fails at key length 32. Head size 128 fails at key lengths 4, 32, 36, and 68.
+    // The same kernel with those lengths passed in at runtime matches the reference.
+    if (!params.is_dynamic() && !params.is_type<paged_attention>()) {
+        jit.remove("SOURCE_SEQ_LEN");
+        jit.remove("TARGET_SEQ_LEN");
+        jit.make("SDPA_RUNTIME_SEQ_LEN", 1);
+        jit.make("SOURCE_SEQ_LEN", "sdpa_source_seq_len");
+        jit.make("TARGET_SEQ_LEN", "sdpa_target_seq_len");
+    }
+
     return jit;
 }
 
 DispatchDataFunc SDPAOptGeneratorMultiToken::get_dispatch_data_func() const {
     return DispatchDataFunc{[](const RuntimeParams& impl_param, KernelData& kd, ImplRuntimeParams* rt_params) {
         auto& wgs = kd.params.workGroups;
+        auto& scalars = kd.params.scalars;
         auto params = SDPABase::requires_shape_canonicalization(impl_param) ? SDPABase::static_canonicalize_shapes(impl_param) : impl_param;
         if (!params.is_dynamic()) {
             auto desc = params.typed_desc<scaled_dot_product_attention>();
@@ -291,6 +309,23 @@ DispatchDataFunc SDPAOptGeneratorMultiToken::get_dispatch_data_func() const {
             const size_t subgroup_size = 16;
             wgs.global = {batch_size * heads_num, ceil_div(target_seq_len, target_seq_len_block_size), align_to(head_size_u * sg_num_scale, subgroup_size)};
             wgs.local = {1, 1, align_to(head_size_u * sg_num_scale, subgroup_size)};
+
+            if (!params.is_type<paged_attention>()) {
+                auto extended_input_k_transpose_order = extend_order_in_num_heads_dim(desc->input_k_transpose_order);
+                const size_t source_seq_len = ensure_positive_dim(get_seq_length(params.get_input_layout(1), extended_input_k_transpose_order),
+                                                                  "source_seq_len",
+                                                                  "SDPA: invalid non-positive ",
+                                                                  " in static dispatch");
+                scalars.clear();
+                ScalarDescriptor source_seq_len_scalar;
+                source_seq_len_scalar.t = ScalarDescriptor::Types::UINT32;
+                source_seq_len_scalar.v.u32 = static_cast<uint32_t>(source_seq_len);
+                ScalarDescriptor target_seq_len_scalar;
+                target_seq_len_scalar.t = ScalarDescriptor::Types::UINT32;
+                target_seq_len_scalar.v.u32 = static_cast<uint32_t>(target_seq_len);
+                scalars.push_back(source_seq_len_scalar);
+                scalars.push_back(target_seq_len_scalar);
+            }
         }
     }};
 }

@@ -1057,7 +1057,9 @@ inline MASK_VECTOR_TYPE FUNC(load_attn_mask)(OPTIONAL_SHAPE_INFO_ARG
                                              uint b0_idx,
                                              uint b1_idx,
                                              uint target_seq_idx,
-                                             uint source_seq_idx
+                                             uint source_seq_idx,
+                                             uint full_source_seq_len,
+                                             uint full_target_seq_len
                                              ATTN_MASK_BUFFER_ARG
                                              ATTN_SCALE_BUFFER_ARG
                                              PA_BUFFERS_ARGS
@@ -1069,12 +1071,12 @@ inline MASK_VECTOR_TYPE FUNC(load_attn_mask)(OPTIONAL_SHAPE_INFO_ARG
 #endif
 #if !IS_CAUSAL && HAS_ATTN_MASK_INPUT
     const uint attn_mask_offset = INPUT3_GET_INDEX_SAFE(b0_idx, b1_idx, target_seq_idx, source_seq_idx);
-    if (target_seq_idx >= (uint)TARGET_SEQ_LEN) {
+    if (target_seq_idx >= full_target_seq_len) {
         unroll_for (uint i = 0; i < SUBGROUP_SIZE; i++) {
             mask_vec[i] = NAN;
         }
     } else {
-        if (source_seq_idx + SUBGROUP_SIZE <= (uint)SOURCE_SEQ_LEN) {
+        if (source_seq_idx + SUBGROUP_SIZE <= full_source_seq_len) {
             unroll_for (uint i = 0; i < SUBGROUP_SIZE; i++) {
                 const INPUT3_TYPE mask_val = attn_mask[attn_mask_offset + i];
                 mask_vec[i] = DECODE_INPUT3_COMPUTE_TYPE(mask_val);
@@ -1084,7 +1086,7 @@ inline MASK_VECTOR_TYPE FUNC(load_attn_mask)(OPTIONAL_SHAPE_INFO_ARG
             // intermediate: that would truncate/reinterpret NAN through an integer conversion and
             // corrupt the bit pattern, producing a large finite garbage value instead of NaN after
             // decode. Decode the real value first and only use NaN in float (mask_vec) space.
-            const uint max_mask_offset = min(source_seq_idx + SUBGROUP_SIZE, (uint)SOURCE_SEQ_LEN);
+            const uint max_mask_offset = min(source_seq_idx + SUBGROUP_SIZE, full_source_seq_len);
             for (uint i = 0; i < SUBGROUP_SIZE; i++) {
                 if (source_seq_idx + i < max_mask_offset) {
                     const INPUT3_TYPE mask_val = attn_mask[attn_mask_offset + i];
@@ -1098,12 +1100,12 @@ inline MASK_VECTOR_TYPE FUNC(load_attn_mask)(OPTIONAL_SHAPE_INFO_ARG
 #endif
 
 #if !IS_CAUSAL && !HAS_ATTN_MASK_INPUT
-    if (target_seq_idx >= (uint)TARGET_SEQ_LEN) {
+    if (target_seq_idx >= full_target_seq_len) {
         unroll_for (uint i = 0; i < SUBGROUP_SIZE; i++) {
             mask_vec[i] = NAN;
         }
     } else {
-        const uint max_mask_offset = min(source_seq_idx + SUBGROUP_SIZE, (uint)SOURCE_SEQ_LEN);
+        const uint max_mask_offset = min(source_seq_idx + SUBGROUP_SIZE, full_source_seq_len);
         for (uint i = 0; i < SUBGROUP_SIZE; i++) {
             mask_vec[i] = source_seq_idx + i < max_mask_offset ? 0 : NAN;
         }
@@ -1112,11 +1114,11 @@ inline MASK_VECTOR_TYPE FUNC(load_attn_mask)(OPTIONAL_SHAPE_INFO_ARG
 
 #if IS_CAUSAL
     #if !IS_PAGED_ATTENTION && CAUSAL_MASK_LOWER_RIGHT
-        const uint causal_offset = max(0, (int)SOURCE_SEQ_LEN - (int)TARGET_SEQ_LEN);
+        const uint causal_offset = max(0, (int)full_source_seq_len - (int)full_target_seq_len);
     #else
         const uint causal_offset = 0;
     #endif
-    if (target_seq_idx >= (uint)TARGET_SEQ_LEN) {
+    if (target_seq_idx >= full_target_seq_len) {
         unroll_for (uint i = 0; i < SUBGROUP_SIZE; i++) {
             mask_vec[i] = NAN;
         }
@@ -1362,6 +1364,10 @@ KERNEL(sdpa_opt)(
     __global SOFTMAX_ACCUMULATOR_TYPE* exp_sums,
     __global SOFTMAX_ACCUMULATOR_TYPE* max_logits,
     __global OUTPUT_TYPE* tmp_out
+#if SDPA_RUNTIME_SEQ_LEN
+    , const uint sdpa_source_seq_len
+    , const uint sdpa_target_seq_len
+#endif
 #endif
 )
 {
@@ -1722,7 +1728,9 @@ KERNEL(sdpa_opt)(
                             b1_idx,
                             target_seq_idx + sglid,
                             // TODO: pass seq_len_calc_size here
-                            seq_len
+                            seq_len,
+                            SOURCE_SEQ_LEN,
+                            TARGET_SEQ_LEN
                             ATTN_MASK_BUFFER
                             ATTN_SCALE_BUFFER
                             PA_BUFFERS);
